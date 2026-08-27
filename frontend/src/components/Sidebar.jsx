@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { Home, UserCheck, Store, LogIn, LogOut, LayoutDashboard } from 'lucide-react';
+import { Home, UserCheck, Store, LogIn, LogOut, LayoutDashboard, Bot } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 export function Sidebar() {
@@ -16,6 +16,7 @@ export function Sidebar() {
     { name: 'Home', path: '/', icon: Home, show: true },
     { name: 'Customer', path: '/customer', icon: UserCheck, show: isAuthenticated && role === 'CUSTOMER' },
     { name: 'Merchant', path: '/merchant', icon: Store, show: isAuthenticated && role === 'MERCHANT' },
+    { name: 'Agent Console', path: '/agent', icon: Bot, show: isAuthenticated && role === 'MERCHANT' },
     { name: 'Login', path: '/login', icon: LogIn, show: !isAuthenticated },
   ];
 

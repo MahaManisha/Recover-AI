@@ -17,23 +17,30 @@ import {
   Mail,
   Clock,
   Eye,
-  CheckCircle2
+  Download,
+  FileSpreadsheet,
+  FileCode,
+  Award
 } from 'lucide-react';
 import { 
   getMerchantRecoveryMetrics, 
   filterMerchantActivityLogs, 
   calculateCampaignPerformance 
 } from '../services/merchantRecoveryAnalytics';
+import { 
+  generateMerchantCSVReport, 
+  generateMerchantJSONReport 
+} from '../services/merchantReportExporter';
 
 /**
- * Merchant Dashboard Component — RecoverAI M6 Page 1 Part 3
- * Displays aggregate revenue recovery metrics, AI decision breakdowns, priority distribution,
- * campaign performance analytics, interactive filters, and detailed activity inspection modal.
+ * Merchant Dashboard Component — RecoverAI M6 Page 1 Part 4
+ * Complete Merchant Dashboard with KPI cards, Decision breakdowns, Campaign performance,
+ * Activity inspection modal, Interactive filters, Executive Recovery Summary, and Client-Side Exporters (CSV/JSON).
  * 
  * STRICT BOUNDARY:
  * - Restricted to MERCHANT role via ProtectedRoute.
- * - Pure simulation view driven by merchantRecoveryAnalytics service.
- * - 0 external side effects, 0 DB writes, 0 storage writes.
+ * - Pure simulation view driven by merchant services.
+ * - 0 backend file calls, 0 DB writes, 0 storage writes.
  */
 export function Merchant() {
   const metrics = useMemo(() => getMerchantRecoveryMetrics(), []);
@@ -64,16 +71,60 @@ export function Merchant() {
     }).format(val || 0);
   };
 
+  // Primary Failure Mode derived dynamically
+  const primaryFailureMode = useMemo(() => {
+    const entries = Object.entries(metrics.failureBreakdown || {});
+    if (entries.length === 0) return 'SERVER_ERROR';
+    entries.sort((a, b) => b[1] - a[1]);
+    return entries[0][0];
+  }, [metrics.failureBreakdown]);
+
+  // Primary AI Strategy derived dynamically
+  const primaryAIStrategy = useMemo(() => {
+    const entries = Object.entries(metrics.actionBreakdown || {});
+    if (entries.length === 0) return 'RECOVERY_OUTREACH';
+    entries.sort((a, b) => b[1] - a[1]);
+    return entries[0][0];
+  }, [metrics.actionBreakdown]);
+
+  // Client-side CSV Download Handler
+  const handleExportCSV = () => {
+    const csvContent = generateMerchantCSVReport(metrics, filteredActivity);
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', 'recoverai_merchant_report.csv');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  // Client-side JSON Download Handler
+  const handleExportJSON = () => {
+    const jsonReportObj = generateMerchantJSONReport(metrics, filteredActivity);
+    const blob = new Blob([JSON.stringify(jsonReportObj, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', 'recoverai_merchant_report.json');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="w-full max-w-6xl mx-auto space-y-6 text-left">
       
-      {/* Header Banner */}
+      {/* Header Banner & Export Action Bar */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-2xl backdrop-blur-xl space-y-4 relative overflow-hidden">
         <div className="absolute top-0 right-0 w-96 h-96 bg-indigo-500/5 rounded-full blur-3xl pointer-events-none" />
         
-        {/* Badges */}
-        <div className="flex items-center justify-between flex-wrap gap-2 relative z-10">
-          <div className="flex items-center gap-2">
+        {/* Badges & Actions */}
+        <div className="flex items-center justify-between flex-wrap gap-3 relative z-10">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-indigo-950/80 text-indigo-400 border border-indigo-800/60">
               <Store className="h-3.5 w-3.5 text-indigo-400" />
               RecoverAI Merchant Dashboard
@@ -84,9 +135,26 @@ export function Merchant() {
             </span>
           </div>
 
-          <span className="text-[11px] font-mono text-slate-400 bg-slate-950/80 px-2.5 py-1 rounded-md border border-slate-800">
-            Merchant Workspace: Active
-          </span>
+          {/* Export Action Controls */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleExportCSV}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-950/80 hover:bg-emerald-900/80 text-emerald-300 hover:text-white text-xs font-bold border border-emerald-800/60 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-emerald-400 shadow-md"
+            >
+              <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-400" />
+              <span>Export CSV Report</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleExportJSON}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-cyan-950/80 hover:bg-cyan-900/80 text-cyan-300 hover:text-white text-xs font-bold border border-cyan-800/60 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-cyan-400 shadow-md"
+            >
+              <FileCode className="h-3.5 w-3.5 text-cyan-400" />
+              <span>Export JSON Report</span>
+            </button>
+          </div>
         </div>
 
         {/* Title */}
@@ -97,6 +165,46 @@ export function Merchant() {
           <p className="text-xs sm:text-sm text-slate-400 max-w-2xl leading-relaxed">
             Real-time revenue recovery performance, AI recovery agent decisions, and customer outreach campaign oversight.
           </p>
+        </div>
+      </div>
+
+      {/* M6 Page 1 Part 4 — Executive Recovery Summary Panel */}
+      <div className="bg-slate-900/90 border border-amber-900/60 bg-gradient-to-r from-amber-950/20 via-slate-900/90 to-slate-900/90 rounded-2xl p-5 shadow-xl space-y-3">
+        <div className="flex items-center justify-between border-b border-amber-900/40 pb-2.5 flex-wrap gap-2">
+          <span className="text-xs font-semibold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+            <Award className="h-4 w-4 text-amber-400" />
+            Executive Recovery Summary
+          </span>
+          <span className="text-[11px] font-mono text-slate-400 bg-slate-950 px-2.5 py-0.5 rounded border border-slate-800">
+            Audit Overview
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs pt-1">
+          <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-800">
+            <span className="text-slate-500 text-[10px] font-semibold uppercase tracking-wider block mb-0.5">Net Revenue Saved</span>
+            <span className="font-extrabold text-amber-300 text-xs sm:text-sm block">{formatCurrency(metrics.totalRecoveredRevenue)}</span>
+          </div>
+
+          <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-800">
+            <span className="text-slate-500 text-[10px] font-semibold uppercase tracking-wider block mb-0.5">Overall Recovery Efficiency</span>
+            <span className="font-extrabold text-emerald-300 text-xs sm:text-sm block">{metrics.recoveryRatePercentage}%</span>
+          </div>
+
+          <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-800">
+            <span className="text-slate-500 text-[10px] font-semibold uppercase tracking-wider block mb-0.5">Primary Failure Mode</span>
+            <span className="font-extrabold text-cyan-300 text-xs sm:text-sm block">{primaryFailureMode}</span>
+          </div>
+
+          <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-800">
+            <span className="text-slate-500 text-[10px] font-semibold uppercase tracking-wider block mb-0.5">AI Strategy</span>
+            <span className="font-extrabold text-indigo-300 text-xs sm:text-sm block">{primaryAIStrategy}</span>
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-amber-900/60 bg-amber-950/40 p-2.5 flex items-center gap-2 text-[11px] font-semibold text-amber-300">
+          <ShieldCheck className="h-4 w-4 shrink-0 text-amber-400" />
+          <span>Simulated Export Exporter — Data generated purely from in-memory session state.</span>
         </div>
       </div>
 
@@ -202,7 +310,7 @@ export function Merchant() {
           <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-800">
             <span className="text-slate-500 text-[10px] font-semibold uppercase tracking-wider block mb-0.5">Outreach Conversion</span>
             <span className="font-extrabold text-emerald-300 text-xs sm:text-sm flex items-center gap-1.5">
-              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+              <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
               {campaignPerf.channelBreakdown.EMAIL.recovered} of {campaignPerf.channelBreakdown.EMAIL.sent} converted
             </span>
           </div>

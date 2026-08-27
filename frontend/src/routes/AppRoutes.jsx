@@ -98,8 +98,15 @@ export function AppRoutes() {
             } 
           />
 
-          {/* Internal / Placeholder Agent Route */}
-          <Route path="/agent" element={<Agent />} />
+          {/* Protected Agent Route */}
+          <Route 
+            path="/agent" 
+            element={
+              <ProtectedRoute requiredRole="MERCHANT">
+                <Agent />
+              </ProtectedRoute>
+            } 
+          />
 
           {/* Fallback Catch-all Route */}
           <Route path="*" element={<Navigate to="/" replace />} />
