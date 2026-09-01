@@ -20,7 +20,19 @@ import {
   Download,
   FileSpreadsheet,
   FileCode,
-  Award
+  Award,
+  Sliders,
+  RotateCcw,
+  Check,
+  Layers,
+  Smartphone,
+  MessageSquare,
+  Webhook,
+  Send,
+  Terminal,
+  Radio,
+  Package,
+  PlusCircle
 } from 'lucide-react';
 import { 
   getMerchantRecoveryMetrics, 
@@ -31,6 +43,19 @@ import {
   generateMerchantCSVReport, 
   generateMerchantJSONReport 
 } from '../services/merchantReportExporter';
+import { 
+  getMerchantRuleConfig, 
+  updateMerchantRuleConfig, 
+  evaluateCustomRules 
+} from '../services/merchantRuleEngine';
+import { 
+  generateWebhookPayload, 
+  simulateWebhookDispatch, 
+  formatCustomOutreachMessage 
+} from '../services/webhookDeliverySimulator';
+
+import { useRecovery } from '../context/RecoveryContext';
+import { useAuth } from '../context/AuthContext';
 
 /**
  * Merchant Dashboard Component — RecoverAI M6 Page 1 Part 4
@@ -43,13 +68,219 @@ import {
  * - 0 backend file calls, 0 DB writes, 0 storage writes.
  */
 export function Merchant() {
-  const metrics = useMemo(() => getMerchantRecoveryMetrics(), []);
+  const { user } = useAuth();
+  const { activeRecoverySession, recoveryEvents, merchantProducts, addMerchantProduct, activeMerchantId, setActiveMerchantId } = useRecovery();
+
+  const currentMerchantId = user?.id || user?.merchantId || '0a9a09a5-ef18-45da-a0ce-7c5f0f23a991';
+
+  React.useEffect(() => {
+    if (currentMerchantId && setActiveMerchantId) {
+      setActiveMerchantId(currentMerchantId);
+    }
+  }, [currentMerchantId, setActiveMerchantId]);
+
+  const ownedProducts = useMemo(() => {
+    return (merchantProducts || []).filter((p) => p.merchantId === currentMerchantId);
+  }, [merchantProducts, currentMerchantId]);
+
+  // Session MUST belong to current authenticated merchant
+  const isMerchantSession = Boolean(
+    activeRecoverySession &&
+    (!activeRecoverySession.merchantId || activeRecoverySession.merchantId === currentMerchantId)
+  );
+
+  const hasValidActiveSession = Boolean(
+    isMerchantSession && activeRecoverySession.currentStatus
+  );
+
+  const merchantRecoveryEvents = useMemo(() => {
+    if (!Array.isArray(recoveryEvents)) return [];
+    return recoveryEvents.filter(
+      (e) => !e.merchantId || e.merchantId === currentMerchantId
+    );
+  }, [recoveryEvents, currentMerchantId]);
+
+  console.log('[Merchant] activeRecoverySession', activeRecoverySession);
+  console.log('[Merchant] hasValidActiveSession', hasValidActiveSession);
+
+  const metrics = useMemo(() => {
+    if (merchantRecoveryEvents.length > 0) {
+      return getMerchantRecoveryMetrics(merchantRecoveryEvents);
+    }
+    if (hasValidActiveSession) {
+      const sess = activeRecoverySession;
+      const isRec = Boolean(sess.recoveryOutcome) || sess.currentStatus === 'RECOVERED';
+      const amt = sess.amount || sess.revenueRiskContext?.revenueAtRisk || 2000;
+      const runtimeEvent = {
+        activityId: `act_${sess.resultEvent?.id || 'runtime'}`,
+        customerId: sess.customerId || sess.recoveryAssessment?.customerId || 'customer_demo',
+        merchantId: sess.merchantId || currentMerchantId,
+        productId: sess.productId || sess.recoveryAssessment?.productId || 'prod_ai_fullstack_001',
+        productName: sess.productName || 'AI & Full-Stack Development Program',
+        failureCode: sess.failureCode || sess.resultEvent?.failureCode || 'SERVER_ERROR',
+        failureReason: sess.recoveryAssessment?.assessment?.failureSummary || 'Payment processing error',
+        priority: sess.recoveryPriority?.priority || 'CRITICAL',
+        priorityScore: sess.recoveryPriority?.score || 85,
+        recommendedAction: isRec ? 'RECOVERED' : (sess.recoveryDecision?.recommendedAction || 'RECOVERY_OUTREACH'),
+        channel: 'EMAIL',
+        status: isRec ? 'RECOVERED' : (sess.currentStatus || 'PENDING'),
+        amount: amt,
+        recoveredAmount: isRec ? (sess.recoveryOutcome?.recoveredRevenue || amt) : 0,
+        currency: sess.currency || 'INR',
+        retryCount: sess.retryAttempt?.retryCount || (isRec ? 1 : 0),
+        timestamp: sess.lastUpdated || new Date().toISOString()
+      };
+      return getMerchantRecoveryMetrics([runtimeEvent]);
+    }
+    return getMerchantRecoveryMetrics([]);
+  }, [merchantRecoveryEvents, hasValidActiveSession, activeRecoverySession, currentMerchantId]);
+
   const campaignPerf = useMemo(() => calculateCampaignPerformance(metrics), [metrics]);
+
+  // Tab navigation state ('ANALYTICS' | 'PRODUCTS' | 'RULE_CONFIG' | 'WEBHOOK_SIMULATOR')
+  const [activeTab, setActiveTab] = useState('ANALYTICS');
+
+  // Product Creation Form state
+  const [newProductName, setNewProductName] = useState('');
+  const [newProductCategory, setNewProductCategory] = useState('Education / Online Program');
+  const [newProductPrice, setNewProductPrice] = useState('');
+  const [newProductCurrency, setNewProductCurrency] = useState('INR');
+  const [newProductDescription, setNewProductDescription] = useState('');
+  const [productFormSuccess, setProductFormSuccess] = useState('');
+  const [productFormError, setProductFormError] = useState('');
+
+  const handleCreateProduct = async (e) => {
+    e.preventDefault();
+    setProductFormError('');
+    setProductFormSuccess('');
+
+    if (!newProductName.trim()) {
+      setProductFormError('Product Name is required.');
+      return;
+    }
+    const priceNum = Number(newProductPrice);
+    if (isNaN(priceNum) || priceNum <= 0) {
+      setProductFormError('Price must be greater than 0.');
+      return;
+    }
+
+    const created = await addMerchantProduct({
+      merchantId: currentMerchantId,
+      name: newProductName.trim(),
+      category: newProductCategory.trim(),
+      price: priceNum,
+      currency: newProductCurrency.trim(),
+      description: newProductDescription.trim(),
+      active: true
+    });
+
+    if (created) {
+      setProductFormSuccess(`Successfully created product: "${created.name}" (${created.formattedPrice || `₹${created.price}`})`);
+      setNewProductName('');
+      setNewProductPrice('');
+      setNewProductDescription('');
+    } else {
+      setProductFormError('Failed to create product in backend database. Please check server logs and inputs.');
+    }
+  };
+
+  // M7 Rule Engine state in React memory
+  const [ruleConfig, setRuleConfig] = useState(() => getMerchantRuleConfig());
+
+  // M7 Webhook Simulator state in React memory
+  const [selectedEventType, setSelectedEventType] = useState('RECOVERY_TRIGGERED');
+  const [selectedOutreachChannel, setSelectedOutreachChannel] = useState('EMAIL');
+  const [webhookDispatchResult, setWebhookDispatchResult] = useState(null);
 
   // Filter state in React memory
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [failureCodeFilter, setFailureCodeFilter] = useState('ALL');
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Fallback sample opportunity for live rule evaluation preview & webhook generation
+  const sampleOpportunity = useMemo(() => ({
+    amount: 2000,
+    currency: 'INR',
+    failureCode: 'SERVER_ERROR',
+    paymentMethod: 'CARD',
+    productId: 'ai-fullstack-program',
+    productName: 'AI & Full-Stack Development Program'
+  }), []);
+
+  // Dynamic active opportunity deriving authoritatively from Customer runtime session when present
+  const activeOpportunity = useMemo(() => {
+    if (!hasValidActiveSession) {
+      return null;
+    }
+    const sess = activeRecoverySession;
+    const isRecovered = Boolean(sess.recoveryOutcome) || sess.currentStatus === 'RECOVERED';
+    const amount = sess.amount || sess.revenueRiskContext?.revenueAtRisk || sess.recoveryAssessment?.amount || sess.attemptEvent?.amount || 2000;
+    const failureCode = sess.failureCode || sess.resultEvent?.failureCode || sess.revenueRiskContext?.failureCode || 'SERVER_ERROR';
+
+    const rawAction = sess.recoveryDecision?.recommendedAction || sess.recoveryActionPlan?.actionType || 'RECOVERY_OUTREACH';
+    const recommendedAction = isRecovered ? 'RECOVERED' : rawAction;
+    const status = isRecovered ? 'RECOVERED' : (sess.currentStatus || 'FAILED');
+
+    return {
+      customerId: sess.customerId || sess.recoveryAssessment?.customerId || sess.resultEvent?.customerId || sess.attemptEvent?.customerId || 'customer_demo',
+      paymentAttemptId: sess.attemptEvent?.id || 'att_demo',
+      paymentResultId: sess.resultEvent?.id || 'result_demo',
+      amount: amount,
+      currency: sess.currency || sess.attemptEvent?.currency || 'INR',
+      failureCode: failureCode,
+      paymentMethod: sess.paymentMethod || sess.attemptEvent?.paymentMethod || 'CARD',
+      productId: sess.productId || sess.recoveryAssessment?.productId || 'ai-fullstack-program',
+      productName: sess.productName || 'AI & Full-Stack Development Program',
+      priority: sess.recoveryPriority?.priority || sess.recoveryAssessment?.priority || 'CRITICAL',
+      priorityScore: sess.recoveryPriority?.score || sess.recoveryAssessment?.priorityScore || 85,
+      recommendedAction: recommendedAction,
+      status: status,
+      retryCount: sess.retryAttempt?.retryCount || (isRecovered ? 1 : 0),
+      recoveryOutcome: sess.recoveryOutcome || null,
+      isRuntime: true
+    };
+  }, [hasValidActiveSession, activeRecoverySession]);
+
+  // Fallback opportunity ONLY for policy preview / webhook simulator when no active runtime opportunity exists
+  const previewOpportunity = useMemo(() => {
+    return activeOpportunity || sampleOpportunity;
+  }, [activeOpportunity, sampleOpportunity]);
+
+  // Live evaluated result preview
+  const liveEvaluation = useMemo(() => {
+    return evaluateCustomRules(previewOpportunity, ruleConfig);
+  }, [previewOpportunity, ruleConfig]);
+
+  // Live active webhook payload
+  const activeWebhookPayload = useMemo(() => {
+    return generateWebhookPayload(selectedEventType, previewOpportunity);
+  }, [selectedEventType, previewOpportunity]);
+
+  // Live active outreach preview
+  const activeOutreachMessage = useMemo(() => {
+    return formatCustomOutreachMessage(selectedOutreachChannel, previewOpportunity);
+  }, [selectedOutreachChannel, previewOpportunity]);
+
+  const handleRuleUpdate = (updates) => {
+    setRuleConfig(prev => updateMerchantRuleConfig(prev, updates));
+  };
+
+  const handleResetRules = () => {
+    setRuleConfig(getMerchantRuleConfig());
+  };
+
+  const handleSimulateWebhook = () => {
+    const res = simulateWebhookDispatch(activeWebhookPayload, {
+      endpoint: 'https://merchant.example.com/webhooks/recoverai'
+    });
+    setWebhookDispatchResult(res);
+  };
+
+  const handleResetWebhookSimulator = () => {
+    setSelectedEventType('RECOVERY_TRIGGERED');
+    setSelectedOutreachChannel('EMAIL');
+    setWebhookDispatchResult(null);
+  };
 
   // Selected activity record state for Detail Modal inspection
   const [selectedActivity, setSelectedActivity] = useState(null);
@@ -74,17 +305,19 @@ export function Merchant() {
   // Primary Failure Mode derived dynamically
   const primaryFailureMode = useMemo(() => {
     const entries = Object.entries(metrics.failureBreakdown || {});
-    if (entries.length === 0) return 'SERVER_ERROR';
-    entries.sort((a, b) => b[1] - a[1]);
-    return entries[0][0];
+    const nonZero = entries.filter(([_, count]) => count > 0);
+    if (nonZero.length === 0) return 'NONE';
+    nonZero.sort((a, b) => b[1] - a[1]);
+    return nonZero[0][0];
   }, [metrics.failureBreakdown]);
 
   // Primary AI Strategy derived dynamically
   const primaryAIStrategy = useMemo(() => {
     const entries = Object.entries(metrics.actionBreakdown || {});
-    if (entries.length === 0) return 'RECOVERY_OUTREACH';
-    entries.sort((a, b) => b[1] - a[1]);
-    return entries[0][0];
+    const nonZero = entries.filter(([_, count]) => count > 0);
+    if (nonZero.length === 0) return 'NO_ACTIVE_RECOVERY';
+    nonZero.sort((a, b) => b[1] - a[1]);
+    return nonZero[0][0];
   }, [metrics.actionBreakdown]);
 
   // Client-side CSV Download Handler
@@ -158,14 +391,127 @@ export function Merchant() {
         </div>
 
         {/* Title */}
+        {/* Title */}
         <div className="space-y-1 relative z-10">
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
-            Merchant Recovery Analytics
+            Merchant Recovery Dashboard
           </h1>
           <p className="text-xs sm:text-sm text-slate-400 max-w-2xl leading-relaxed">
-            Real-time revenue recovery performance, AI recovery agent decisions, and customer outreach campaign oversight.
+            Real-time revenue recovery performance, AI agent decisions, and custom rule policy configuration.
           </p>
         </div>
+
+        {/* Navigation Tabs Bar */}
+        <div className="flex items-center gap-2 pt-3 border-t border-slate-800 relative z-10 flex-wrap">
+          <button
+            type="button"
+            onClick={() => setActiveTab('ANALYTICS')}
+            className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-extrabold transition-all border cursor-pointer ${
+              activeTab === 'ANALYTICS'
+                ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/50 shadow-md shadow-indigo-500/10'
+                : 'bg-slate-950/60 text-slate-400 border-slate-800 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <BarChart3 className="h-4 w-4" />
+            <span>Recovery Overview & Analytics</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('PRODUCTS')}
+            className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-extrabold transition-all border cursor-pointer ${
+              activeTab === 'PRODUCTS'
+                ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50 shadow-md shadow-cyan-500/10'
+                : 'bg-slate-950/60 text-slate-400 border-slate-800 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <Package className="h-4 w-4 text-cyan-400" />
+            <span>Merchant Products</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('RULE_CONFIG')}
+            className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-extrabold transition-all border cursor-pointer ${
+              activeTab === 'RULE_CONFIG'
+                ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50 shadow-md shadow-cyan-500/10'
+                : 'bg-slate-950/60 text-slate-400 border-slate-800 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <Sliders className="h-4 w-4" />
+            <span>Policy & Custom Rule Engine</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('WEBHOOK_SIMULATOR')}
+            className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-extrabold transition-all border cursor-pointer ${
+              activeTab === 'WEBHOOK_SIMULATOR'
+                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50 shadow-md shadow-emerald-500/10'
+                : 'bg-slate-950/60 text-slate-400 border-slate-800 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <Webhook className="h-4 w-4 text-emerald-400" />
+            <span>Webhook & Outreach Simulator</span>
+          </button>
+        </div>
+      </div>
+
+      {/* TAB 1: ANALYTICS VIEW */}
+      {activeTab === 'ANALYTICS' && (
+        <>
+      {/* Active Customer Recovery Session Banner */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
+        <div className="flex items-center justify-between border-b border-slate-800 pb-2.5 flex-wrap gap-2">
+          <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
+            <Radio className="h-4 w-4 text-cyan-400 animate-pulse" />
+            Active Customer Recovery Session
+          </span>
+          {activeOpportunity ? (
+            <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[10px] font-extrabold border ${
+              activeOpportunity.status === 'RECOVERED'
+                ? 'bg-emerald-950 text-emerald-300 border-emerald-800/80'
+                : 'bg-amber-950 text-amber-300 border-amber-800/80'
+            }`}>
+              {activeOpportunity.status}
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[10px] font-extrabold border bg-slate-950 text-slate-400 border-slate-800">
+              NO_ACTIVE_SESSION
+            </span>
+          )}
+        </div>
+
+        {activeOpportunity ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs pt-1">
+            <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-800">
+              <span className="text-slate-500 text-[10px] font-semibold uppercase tracking-wider block mb-0.5">Active Customer</span>
+              <span className="font-mono font-bold text-cyan-300 text-xs block truncate">{activeOpportunity.customerId}</span>
+            </div>
+
+            <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-800">
+              <span className="text-slate-500 text-[10px] font-semibold uppercase tracking-wider block mb-0.5">Product</span>
+              <span className="font-bold text-white text-xs block truncate">{activeOpportunity.productName}</span>
+            </div>
+
+            <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-800">
+              <span className="text-slate-500 text-[10px] font-semibold uppercase tracking-wider block mb-0.5">Volume & Failure</span>
+              <span className="font-bold text-white text-xs block">{formatCurrency(activeOpportunity.amount)} ({activeOpportunity.failureCode})</span>
+            </div>
+
+            <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-800">
+              <span className="text-slate-500 text-[10px] font-semibold uppercase tracking-wider block mb-0.5">Current Recommendation</span>
+              <span className={`font-extrabold text-xs block ${activeOpportunity.status === 'RECOVERED' ? 'text-emerald-300' : 'text-indigo-300'}`}>
+                {activeOpportunity.recommendedAction}
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div className="py-6 text-center bg-slate-950/40 rounded-xl border border-slate-800/60 space-y-1">
+            <p className="text-slate-300 text-xs font-semibold">No active customer recovery session</p>
+            <p className="text-slate-500 text-[11px]">No active payment failure or live recovery opportunity currently in progress.</p>
+          </div>
+        )}
       </div>
 
       {/* M6 Page 1 Part 4 — Executive Recovery Summary Panel */}
@@ -561,6 +907,588 @@ export function Merchant() {
         </div>
 
       </div>
+      </>
+      )}
+
+      {/* TAB: MERCHANT PRODUCTS MANAGEMENT & CREATION */}
+      {activeTab === 'PRODUCTS' && (
+        <div className="space-y-6">
+          {/* Header Card */}
+          <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-2">
+            <h2 className="text-xl font-bold text-white flex items-center gap-2">
+              <Package className="h-5 w-5 text-cyan-400" />
+              Merchant Product Management & Ownership
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-400">
+              Create and manage products owned by merchant (<span className="font-mono text-cyan-300">{currentMerchantId}</span>). Customers view only products belonging to their active merchant.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Create Product Form */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <span className="text-xs font-bold uppercase tracking-wider text-cyan-400 flex items-center gap-2">
+                  <PlusCircle className="h-4 w-4" />
+                  Add New Merchant Product
+                </span>
+                <span className="text-[10px] font-mono text-slate-400 bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
+                  {currentMerchantId}
+                </span>
+              </div>
+
+              {productFormError && (
+                <div className="p-3 rounded-xl bg-red-950/60 border border-red-800/80 text-red-300 text-xs font-semibold">
+                  {productFormError}
+                </div>
+              )}
+
+              {productFormSuccess && (
+                <div className="p-3 rounded-xl bg-emerald-950/60 border border-emerald-800/80 text-emerald-300 text-xs font-semibold">
+                  {productFormSuccess}
+                </div>
+              )}
+
+              <form onSubmit={handleCreateProduct} className="space-y-4 text-xs">
+                <div>
+                  <label className="block text-slate-400 font-semibold mb-1">Product Name *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Advanced AI Microservices & Agents"
+                    value={newProductName}
+                    onChange={(e) => setNewProductName(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-cyan-400"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-slate-400 font-semibold mb-1">Price (₹ INR) *</label>
+                    <input
+                      type="number"
+                      required
+                      min="1"
+                      placeholder="e.g. 3500"
+                      value={newProductPrice}
+                      onChange={(e) => setNewProductPrice(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-cyan-400"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-400 font-semibold mb-1">Category</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Education / Online Program"
+                      value={newProductCategory}
+                      onChange={(e) => setNewProductCategory(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-cyan-400"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 font-semibold mb-1">Description</label>
+                  <textarea
+                    rows={3}
+                    placeholder="Provide a detailed overview of the program or service..."
+                    value={newProductDescription}
+                    onChange={(e) => setNewProductDescription(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-cyan-400"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-3 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-xs shadow-lg shadow-cyan-500/20 transition-all cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <PlusCircle className="h-4 w-4" />
+                  <span>Create Merchant Product</span>
+                </button>
+              </form>
+            </div>
+
+            {/* Owned Products Catalog List */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <span className="text-xs font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-2">
+                  <Package className="h-4 w-4" />
+                  Owned Products ({merchantProducts.filter(p => p.merchantId === currentMerchantId).length})
+                </span>
+                <span className="text-[10px] font-mono text-slate-400 bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
+                  Active Products
+                </span>
+              </div>
+
+              <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
+                {merchantProducts
+                  .filter((p) => p.merchantId === currentMerchantId)
+                  .map((prod) => (
+                    <div key={prod.id} className="bg-slate-950/70 p-4 rounded-xl border border-slate-800 flex items-center justify-between gap-4">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-white text-xs">{prod.name}</span>
+                          <span className="text-[10px] font-mono text-cyan-400 bg-cyan-950 px-2 py-0.5 rounded border border-cyan-800/60">
+                            {prod.id}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 line-clamp-1">{prod.description}</p>
+                        <span className="text-[10px] text-slate-500 font-semibold block">{prod.category}</span>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <span className="text-base font-extrabold text-white block">{prod.formattedPrice || `₹${prod.price}`}</span>
+                        <span className="text-[10px] text-emerald-400 font-bold uppercase">ACTIVE</span>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 2: RECOVERY POLICY & RULE CONFIGURATOR VIEW */}
+      {activeTab === 'RULE_CONFIG' && (
+        <div className="space-y-6">
+          
+          {/* Configurator Card Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            
+            {/* Panel 1: RECOVERY THRESHOLDS & ENGINE SETTINGS */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <span className="text-xs font-semibold uppercase tracking-wider text-cyan-400 flex items-center gap-2">
+                  <Sliders className="h-4 w-4" />
+                  Recovery Policy Controls
+                </span>
+                <span className="text-[11px] font-mono text-slate-400 bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
+                  React Memory State
+                </span>
+              </div>
+
+              {/* Control 1: Min Revenue Threshold */}
+              <div className="space-y-2">
+                <div className="flex justify-between items-center text-xs">
+                  <label className="text-slate-300 font-medium">Min Revenue-at-Risk Threshold</label>
+                  <span className="font-mono text-cyan-400 font-extrabold text-sm">
+                    ₹{ruleConfig.minRevenueThreshold.toLocaleString('en-IN')} INR
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="10000"
+                  step="500"
+                  value={ruleConfig.minRevenueThreshold}
+                  onChange={(e) => handleRuleUpdate({ minRevenueThreshold: Number(e.target.value) })}
+                  className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
+                />
+                <div className="flex justify-between text-[10px] text-slate-500 font-mono">
+                  <span>₹0 (All Payments)</span>
+                  <span>₹5,000</span>
+                  <span>₹10,000 (High Value)</span>
+                </div>
+              </div>
+
+              {/* Control 2: Min Priority Threshold */}
+              <div className="space-y-2">
+                <label className="text-xs text-slate-300 font-medium block">Minimum Required Priority Tier</label>
+                <select
+                  value={ruleConfig.minPriorityThreshold}
+                  onChange={(e) => handleRuleUpdate({ minPriorityThreshold: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-cyan-500 transition-all cursor-pointer"
+                >
+                  <option value="LOW">LOW (Qualify Low, Medium, High, Critical)</option>
+                  <option value="MEDIUM">MEDIUM (Qualify Medium, High, Critical)</option>
+                  <option value="HIGH">HIGH (Qualify High & Critical)</option>
+                  <option value="CRITICAL">CRITICAL (Qualify Critical Only)</option>
+                </select>
+              </div>
+
+              {/* Control 3: Preferred Outreach Channel */}
+              <div className="space-y-2">
+                <label className="text-xs text-slate-300 font-medium block">Preferred Outreach Channel</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {['EMAIL', 'SMS', 'WHATSAPP'].map((ch) => (
+                    <button
+                      key={ch}
+                      type="button"
+                      onClick={() => handleRuleUpdate({ preferredChannel: ch })}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold transition-all border cursor-pointer ${
+                        ruleConfig.preferredChannel === ch
+                          ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50 shadow-sm'
+                          : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
+                      }`}
+                    >
+                      {ch}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Control 4: Auto-Outreach Engine Toggle */}
+              <div className="space-y-2 pt-2 border-t border-slate-800">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-slate-300">Automated Outreach Engine</span>
+                  <button
+                    type="button"
+                    onClick={() => handleRuleUpdate({ autoOutreachEnabled: !ruleConfig.autoOutreachEnabled })}
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all border cursor-pointer ${
+                      ruleConfig.autoOutreachEnabled
+                        ? 'bg-emerald-950 text-emerald-300 border-emerald-800/80 shadow-sm shadow-emerald-500/10'
+                        : 'bg-rose-950 text-rose-300 border-rose-800/80 shadow-sm shadow-rose-500/10'
+                    }`}
+                  >
+                    {ruleConfig.autoOutreachEnabled ? 'ENABLED' : 'DISABLED'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Panel 2: SCORING WEIGHTS & RULE FACTORS */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <span className="text-xs font-semibold uppercase tracking-wider text-indigo-400 flex items-center gap-2">
+                  <Layers className="h-4 w-4" />
+                  Priority Scoring Weight Allocations
+                </span>
+                <span className="text-[11px] font-mono text-slate-400 bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
+                  Rule Scoring Engine
+                </span>
+              </div>
+
+              {/* Revenue Weight */}
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-slate-300">Revenue Value Weight</span>
+                  <span className="font-mono text-indigo-400 font-bold">{ruleConfig.revenueWeight} pts</span>
+                </div>
+                <input
+                  type="range"
+                  min="10"
+                  max="50"
+                  step="5"
+                  value={ruleConfig.revenueWeight}
+                  onChange={(e) => handleRuleUpdate({ revenueWeight: Number(e.target.value) })}
+                  className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-400"
+                />
+              </div>
+
+              {/* Failure Severity Weight */}
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-slate-300">Failure Severity Weight</span>
+                  <span className="font-mono text-indigo-400 font-bold">{ruleConfig.failureWeight} pts</span>
+                </div>
+                <input
+                  type="range"
+                  min="10"
+                  max="50"
+                  step="5"
+                  value={ruleConfig.failureWeight}
+                  onChange={(e) => handleRuleUpdate({ failureWeight: Number(e.target.value) })}
+                  className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-400"
+                />
+              </div>
+
+              {/* Payment Context Weight */}
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-slate-300">Payment Context Weight</span>
+                  <span className="font-mono text-indigo-400 font-bold">{ruleConfig.paymentMethodWeight} pts</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="30"
+                  step="5"
+                  value={ruleConfig.paymentMethodWeight}
+                  onChange={(e) => handleRuleUpdate({ paymentMethodWeight: Number(e.target.value) })}
+                  className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-400"
+                />
+              </div>
+
+              {/* Action Controls */}
+              <div className="pt-4 border-t border-slate-800 flex justify-end">
+                <button
+                  type="button"
+                  onClick={handleResetRules}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700 transition-all cursor-pointer shadow-md"
+                >
+                  <RotateCcw className="h-3.5 w-3.5 text-cyan-400" />
+                  <span>Reset to Default Policy</span>
+                </button>
+              </div>
+            </div>
+
+          </div>
+
+          {/* Live Evaluation Preview Box */}
+          <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <span className="text-xs font-semibold uppercase tracking-wider text-emerald-400 flex items-center gap-2">
+                <Zap className="h-4 w-4" />
+                Live Rule Evaluation Preview
+              </span>
+              <span className="text-[11px] font-mono text-slate-400 bg-slate-950 px-2.5 py-0.5 rounded border border-slate-800">
+                Sample: ₹2,000 CARD Payment (SERVER_ERROR)
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-slate-950/60 p-4 rounded-xl border border-slate-800/80">
+              <div>
+                <span className="text-slate-400 text-[11px] font-semibold uppercase tracking-wider block">Eligibility Status</span>
+                <span className={`text-base font-extrabold block mt-0.5 ${liveEvaluation.isEligible ? 'text-emerald-400' : 'text-amber-400'}`}>
+                  {liveEvaluation.isEligible ? 'QUALIFIED FOR OUTREACH' : 'NON-QUALIFIED'}
+                </span>
+              </div>
+
+              <div>
+                <span className="text-slate-400 text-[11px] font-semibold uppercase tracking-wider block">Evaluated Action</span>
+                <span className="text-base font-extrabold text-indigo-300 block mt-0.5">
+                  {liveEvaluation.recommendedAction}
+                </span>
+              </div>
+
+              <div>
+                <span className="text-slate-400 text-[11px] font-semibold uppercase tracking-wider block">Evaluated Priority & Score</span>
+                <span className="text-base font-extrabold text-cyan-400 block mt-0.5">
+                  {liveEvaluation.evaluatedPriority} ({liveEvaluation.evaluatedScore}/100)
+                </span>
+              </div>
+            </div>
+
+            {/* Decision Reason & Applied Rules */}
+            <div className="space-y-2 text-xs">
+              <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-xl text-slate-300 leading-relaxed font-medium">
+                <span className="font-semibold text-cyan-400">Evaluation Reason: </span>
+                {liveEvaluation.decisionReason}
+              </div>
+
+              <div className="space-y-1">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Applied Policy Rules:</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {liveEvaluation.appliedRules.map((rule, idx) => (
+                    <span key={idx} className="px-2.5 py-1 rounded bg-slate-950 text-[11px] font-mono text-cyan-300 border border-slate-800">
+                      {rule}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Safety Disclaimer */}
+          <p className="text-[11px] text-slate-500 text-center italic">
+            Simulation only — rule updates operate in React memory and do not persist to database or localStorage.
+          </p>
+
+        </div>
+      )}
+
+      {/* TAB 3: M7 PAGE 1 PART 2 — WEBHOOK EVENT & OUTREACH SIMULATOR VIEW */}
+      {activeTab === 'WEBHOOK_SIMULATOR' && (
+        <div className="space-y-6">
+          
+          {/* Control Bar & Action Header */}
+          <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3 flex-wrap gap-2">
+              <span className="text-xs font-semibold uppercase tracking-wider text-emerald-400 flex items-center gap-2">
+                <Webhook className="h-4 w-4" />
+                Enterprise Webhook Event & Custom Outreach Simulator
+              </span>
+              <span className="text-[11px] font-mono text-slate-400 bg-slate-950 px-2.5 py-0.5 rounded border border-slate-800">
+                React Memory Simulator
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
+              {/* Selector 1: Event Type */}
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-300 font-medium block">Simulated Event Type</label>
+                <select
+                  value={selectedEventType}
+                  onChange={(e) => setSelectedEventType(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-emerald-500 transition-all cursor-pointer"
+                >
+                  <option value="RECOVERY_TRIGGERED">RECOVERY_TRIGGERED (Outreach Initiated)</option>
+                  <option value="PAYMENT_RECOVERED">PAYMENT_RECOVERED (Customer Payment Success)</option>
+                  <option value="RECOVERY_EXPIRED">RECOVERY_EXPIRED (Opportunity Timed Out)</option>
+                </select>
+              </div>
+
+              {/* Selector 2: Outreach Channel */}
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-300 font-medium block">Outreach Channel Preview</label>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {['EMAIL', 'SMS', 'WHATSAPP'].map((ch) => (
+                    <button
+                      key={ch}
+                      type="button"
+                      onClick={() => setSelectedOutreachChannel(ch)}
+                      className={`py-2 px-2 rounded-xl text-xs font-bold transition-all border cursor-pointer ${
+                        selectedOutreachChannel === ch
+                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50 shadow-sm'
+                          : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
+                      }`}
+                    >
+                      {ch}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Action Controls */}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSimulateWebhook}
+                  className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-emerald-950 hover:bg-emerald-900 text-emerald-300 text-xs font-bold border border-emerald-800 transition-all cursor-pointer shadow-md shadow-emerald-500/10"
+                >
+                  <Send className="h-3.5 w-3.5 text-emerald-400" />
+                  <span>Simulate Dispatch</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleResetWebhookSimulator}
+                  className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold border border-slate-700 transition-all cursor-pointer"
+                  title="Reset Simulator"
+                >
+                  <RotateCcw className="h-3.5 w-3.5 text-cyan-400" />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Main Simulator Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            
+            {/* Column 1: JSON Payload & Header Inspector */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <span className="text-xs font-semibold uppercase tracking-wider text-cyan-400 flex items-center gap-2">
+                  <Terminal className="h-4 w-4" />
+                  Live Webhook Payload & Headers
+                </span>
+                <span className="text-[11px] font-mono text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-800/80">
+                  POST (Simulated)
+                </span>
+              </div>
+
+              {/* Header Configuration Inspector */}
+              <div className="space-y-1.5 font-mono text-[11px]">
+                <span className="text-[10px] font-sans font-semibold uppercase tracking-wider text-slate-400 block">Simulated Request Headers</span>
+                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1 text-slate-300">
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Content-Type:</span>
+                    <span className="text-cyan-300">application/json</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">X-RecoverAI-Event:</span>
+                    <span className="text-emerald-300 font-bold">{selectedEventType}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">X-RecoverAI-Environment:</span>
+                    <span className="text-slate-400">demo-simulation</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Endpoint Inspector */}
+              <div className="space-y-1 font-mono text-[11px]">
+                <span className="text-[10px] font-sans font-semibold uppercase tracking-wider text-slate-400 block">Simulated Endpoint</span>
+                <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 text-slate-300 truncate">
+                  https://merchant.example.com/webhooks/recoverai
+                </div>
+              </div>
+
+              {/* JSON Payload Viewer */}
+              <div className="space-y-1 font-mono text-[11px]">
+                <span className="text-[10px] font-sans font-semibold uppercase tracking-wider text-slate-400 block">JSON Event Payload</span>
+                <pre className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 text-cyan-300 overflow-x-auto max-h-64 scrollbar-thin text-[11px] leading-relaxed">
+                  {JSON.stringify(activeWebhookPayload, null, 2)}
+                </pre>
+              </div>
+
+              {/* Dispatch Result Card */}
+              {webhookDispatchResult && (
+                <div className="p-3 bg-emerald-950/40 border border-emerald-800/80 rounded-xl space-y-1.5 animate-fadeIn">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
+                      <Check className="h-4 w-4 text-emerald-400" />
+                      Delivery Status: {webhookDispatchResult.responseCode} OK ({webhookDispatchResult.deliveryStatus})
+                    </span>
+                    <span className="text-[10px] font-mono text-slate-400">{new Date(webhookDispatchResult.timestamp).toLocaleTimeString()}</span>
+                  </div>
+                  <p className="text-[11px] text-emerald-200/90 font-medium leading-relaxed">
+                    {webhookDispatchResult.notice}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Column 2: Channel-Specific Outreach Preview */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <span className="text-xs font-semibold uppercase tracking-wider text-indigo-400 flex items-center gap-2">
+                  <MessageSquare className="h-4 w-4" />
+                  {selectedOutreachChannel} Outreach Preview
+                </span>
+                <span className="text-[11px] font-mono text-cyan-400 bg-cyan-950 px-2 py-0.5 rounded border border-cyan-800/80">
+                  Preview Mode
+                </span>
+              </div>
+
+              {/* Sender & Recipient Metadata */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                  <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider block">Sender Identifier</span>
+                  <span className="font-mono text-slate-200 font-bold text-[11px] truncate block">{activeOutreachMessage.sender}</span>
+                </div>
+
+                <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                  <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider block">Target Recipient</span>
+                  <span className="font-mono text-slate-200 font-bold text-[11px] truncate block">{activeOutreachMessage.recipient}</span>
+                </div>
+              </div>
+
+              {/* Subject Line if EMAIL */}
+              {activeOutreachMessage.subject && (
+                <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 text-xs">
+                  <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider block">Subject Line</span>
+                  <span className="font-semibold text-cyan-300 text-xs block">{activeOutreachMessage.subject}</span>
+                </div>
+              )}
+
+              {/* Message Body Box */}
+              <div className="space-y-1">
+                <div className="flex justify-between items-center text-[10px]">
+                  <span className="font-semibold text-slate-400 uppercase tracking-wider">Simulated Message Body</span>
+                  <span className="font-mono text-slate-500">{activeOutreachMessage.characterCount} characters</span>
+                </div>
+                <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-slate-200 text-xs leading-relaxed whitespace-pre-wrap font-sans">
+                  {activeOutreachMessage.messageText}
+                </div>
+              </div>
+
+              {/* Safety Note */}
+              <div className="p-3 bg-slate-950/60 border border-slate-800 rounded-xl text-[11px] text-slate-400 flex items-center gap-2">
+                <ShieldCheck className="h-4 w-4 text-cyan-400 shrink-0" />
+                <span>Simulated preview — no actual email, SMS, or WhatsApp message is sent.</span>
+              </div>
+            </div>
+
+          </div>
+
+          {/* Safety Disclaimer */}
+          <p className="text-[11px] text-slate-500 text-center italic">
+            Simulation environment — 0 external HTTP POST requests performed, 0 real emails/SMS sent.
+          </p>
+
+        </div>
+      )}
 
       {/* M6 Page 1 Part 3 — Interactive Activity Detail Inspection Modal */}
       {selectedActivity && (

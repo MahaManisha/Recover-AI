@@ -23,6 +23,7 @@ import {
   createAgentOverride, 
   createPolicyAuditEntry 
 } from '../services/agentConsoleStream';
+import { useRecovery } from '../context/RecoveryContext';
 
 /**
  * RecoverAI Autonomous Agent Console — RecoverAI M6 Page 2 Part 2
@@ -35,7 +36,18 @@ import {
  * - 0 external side effects, 0 DB calls, 0 storage writes.
  */
 export function Agent() {
-  const baseConsoleState = useMemo(() => getAgentConsoleState(), []);
+  const { activeRecoverySession } = useRecovery();
+
+  console.log('[Agent] activeRecoverySession', {
+    currentStatus: activeRecoverySession?.currentStatus,
+    customerId: activeRecoverySession?.customerId,
+    amount: activeRecoverySession?.amount,
+    failureCode: activeRecoverySession?.failureCode,
+    hasOutcome: Boolean(activeRecoverySession?.recoveryOutcome),
+    timestamp: activeRecoverySession?.lastUpdated
+  });
+
+  const baseConsoleState = useMemo(() => getAgentConsoleState(activeRecoverySession), [activeRecoverySession]);
 
   // Policy state in React memory
   const [policy, setPolicy] = useState(() => getAgentPolicyDefaults());

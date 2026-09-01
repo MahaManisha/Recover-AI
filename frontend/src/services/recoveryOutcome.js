@@ -59,7 +59,9 @@ export function createRecoveryOutcome(
     retryPaymentResultId: retryResult.id,
 
     customerId: retryAttempt.customerId || originalFailedAttempt.customerId || 'customer_demo',
-    productId: retryAttempt.productId || originalFailedAttempt.productId || 'ai-fullstack-program',
+    merchantId: retryAttempt.merchantId || originalFailedAttempt.merchantId || 'merchant_001',
+    productId: retryAttempt.productId || originalFailedAttempt.productId || 'prod_ai_fullstack_001',
+    productName: retryAttempt.productName || originalFailedAttempt.productName || 'AI & Full-Stack Development Program',
 
     revenueAtRisk: revenueAtRisk,
     recoveredRevenue: recoveredRevenue,

@@ -1,12 +1,17 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { BookOpen, ShoppingBag, ArrowRight, Sparkles, CheckCircle2 } from 'lucide-react';
+import { useRecovery } from '../../context/RecoveryContext';
 import { DEMO_PRODUCT } from '../../data/demoProduct';
 
 export function ProductCard({ product = DEMO_PRODUCT, onBuyNow }) {
   const navigate = useNavigate();
+  const { setSelectedProduct } = useRecovery();
 
   const handleBuyNow = () => {
+    if (setSelectedProduct) {
+      setSelectedProduct(product);
+    }
     if (onBuyNow) {
       onBuyNow(product);
     } else {

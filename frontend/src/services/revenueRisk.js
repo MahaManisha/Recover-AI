@@ -26,7 +26,9 @@ export function createRevenueRiskContext(paymentFailedEvent) {
     paymentAttemptId: paymentFailedEvent.attemptId || 'att_unknown',
     paymentResultId: paymentFailedEvent.id || 'result_unknown',
     customerId: paymentFailedEvent.customerId || 'customer_demo',
-    productId: paymentFailedEvent.productId || 'ai-fullstack-program',
+    merchantId: paymentFailedEvent.merchantId || 'merchant_001',
+    productId: paymentFailedEvent.productId || 'prod_ai_fullstack_001',
+    productName: paymentFailedEvent.productName || 'AI & Full-Stack Development Program',
     amount: amount,
     currency: paymentFailedEvent.currency || 'INR',
     revenueAtRisk: amount, // Potential purchase value at risk if customer abandons

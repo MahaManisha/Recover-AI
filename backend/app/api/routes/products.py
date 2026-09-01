@@ -1,37 +1,26 @@
 import time
 import uuid
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Query, status, HTTPException
+from fastapi import APIRouter, Depends, Query, status
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models.user import User
 from app.models.product import Product, seed_demo_products, DEFAULT_DEMO_MERCHANT_ID
 from app.schemas.product import ProductCreate, ProductResponse
-from app.services.rbac import require_merchant
 from app.services.auth import security_bearer, get_current_user
 
 router = APIRouter()
 
-@router.get("/access")
-async def merchant_access(current_user: User = Depends(require_merchant)):
-    """
-    Verification endpoint for MERCHANT role access.
-    """
-    return {
-        "message": "Merchant access granted",
-        "user_id": current_user.id,
-        "role": current_user.role
-    }
-
-@router.get("/products", response_model=List[ProductResponse])
-async def get_merchant_products(
+@router.get("", response_model=List[ProductResponse])
+@router.get("/", response_model=List[ProductResponse])
+async def list_products(
     merchantId: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
     """
-    Retrieves merchant products stored in the database.
-    Optionally filters by merchantId query parameter.
+    GET /api/products — Retrieves products from backend database.
+    Supports optional merchantId filtering via query parameter.
     """
     seed_demo_products(db)
 
@@ -42,14 +31,29 @@ async def get_merchant_products(
     products = query.order_by(Product.created_at.desc()).all()
     return [p.to_dict() for p in products]
 
-@router.post("/products", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
-async def create_merchant_product(
+@router.get("/merchant/{merchant_id}", response_model=List[ProductResponse])
+@router.get("/merchants/{merchant_id}", response_model=List[ProductResponse])
+async def get_merchant_specific_products(
+    merchant_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    GET /api/products/merchants/{merchant_id} — Retrieves products belonging to a specific merchant.
+    """
+    seed_demo_products(db)
+
+    products = db.query(Product).filter(Product.merchantId == merchant_id).order_by(Product.created_at.desc()).all()
+    return [p.to_dict() for p in products]
+
+@router.post("", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
+async def create_product(
     product_in: ProductCreate,
     db: Session = Depends(get_db),
     auth: Optional[HTTPAuthorizationCredentials] = Depends(security_bearer)
 ):
     """
-    Creates a new merchant product and persists it directly into the database.
+    POST /api/products — Creates a product directly in the database.
     """
     current_user = None
     if auth and auth.credentials:
@@ -78,4 +82,3 @@ async def create_merchant_product(
     db.refresh(product)
 
     return product.to_dict()
-

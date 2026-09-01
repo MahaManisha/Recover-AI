@@ -25,11 +25,144 @@ export function getAgentPolicyDefaults() {
 
 /**
  * Returns structured autonomous agent telemetry and 5-stage decision pipeline stream.
+ * Accepts optional activeRecoverySession to build pipeline from actual Customer runtime transaction data.
  * 
- * @returns {Object} Agent console state schema
  */
-export function getAgentConsoleState() {
+export function getAgentConsoleState(activeRecoverySession = null) {
   const timestamp = new Date().toISOString();
+
+  if (activeRecoverySession && (
+    activeRecoverySession.resultEvent || 
+    activeRecoverySession.recoveryAssessment || 
+    activeRecoverySession.currentStatus === 'RECOVERED' || 
+    activeRecoverySession.recoveryOutcome ||
+    activeRecoverySession.attemptEvent ||
+    activeRecoverySession.customerId
+  )) {
+    const sess = activeRecoverySession;
+    const isRecovered = Boolean(sess.recoveryOutcome) || sess.currentStatus === 'RECOVERED';
+    const customerId = sess.customerId || sess.recoveryAssessment?.customerId || sess.resultEvent?.customerId || sess.attemptEvent?.customerId || 'customer_demo';
+    const amount = Number(sess.amount || sess.recoveryAssessment?.amount || sess.attemptEvent?.amount || 2000);
+    const currency = sess.currency || sess.recoveryAssessment?.currency || sess.attemptEvent?.currency || 'INR';
+    const failureCode = sess.failureCode || sess.resultEvent?.failureCode || sess.revenueRiskContext?.failureCode || 'SERVER_ERROR';
+    const paymentMethod = sess.paymentMethod || sess.attemptEvent?.paymentMethod || 'CARD';
+    const score = Number(sess.recoveryPriority?.score || sess.recoveryAssessment?.priorityScore || 85);
+    const priority = sess.recoveryPriority?.priority || sess.recoveryAssessment?.priority || 'CRITICAL';
+
+    const isExecuted = Boolean(sess.recoveryExecution);
+
+    const recommendedAction = isRecovered
+      ? 'RECOVERED'
+      : (sess.recoveryDecision?.recommendedAction || sess.recoveryActionPlan?.actionType || 'RECOVERY_OUTREACH');
+
+    const channel = isRecovered ? 'NONE' : (sess.recoveryActionPlan?.channel || 'EMAIL');
+
+    const recoveredRevenue = isRecovered 
+      ? Number(sess.recoveryOutcome?.recoveredRevenue || amount)
+      : 0;
+
+    const executionStreamStatus = isRecovered
+      ? 'COMPLETED'
+      : (isExecuted ? 'SIMULATED' : 'PENDING');
+
+    return {
+      agentStatus: 'AUTONOMOUS_ACTIVE',
+      mode: 'MODE: RULE_BASED_ORCHESTRATION',
+      environment: 'RUNTIME_CUSTOMER_ENVIRONMENT',
+      evaluatedFailedPayments: 1,
+      recommendedRecoveryActions: isRecovered || recommendedAction === 'NO_ACTION' ? 0 : 1,
+      executionStreamStatus: executionStreamStatus,
+      timestamp: timestamp,
+      pipeline: [
+        {
+          stageNumber: 1,
+          stage: 'Signal Evaluation',
+          stageCode: 'SIGNAL_EVALUATION',
+          status: 'COMPLETED',
+          event: sess.resultEvent?.type || 'PAYMENT_FAILED_DETECTED',
+          summary: `Detected payment result (${failureCode}) for customer ${customerId}`,
+          details: {
+            customerId,
+            failureCode,
+            failureReason: sess.recoveryAssessment?.assessment?.failureSummary || `Payment failure (${failureCode})`,
+            attemptedAmount: amount,
+            currency,
+            paymentMethod
+          }
+        },
+        {
+          stageNumber: 2,
+          stage: 'Priority Scoring',
+          stageCode: 'PRIORITY_SCORING',
+          status: 'COMPLETED',
+          event: 'RECOVERY_PRIORITY_CALCULATED',
+          summary: `Calculated priority score (${score}/100) and priority tier (${priority})`,
+          details: {
+            score,
+            priority,
+            maxScore: 100,
+            businessImpact: priority === 'CRITICAL' ? 'HIGH_VALUE_SUBSCRIPTION' : 'STANDARD_PURCHASE'
+          }
+        },
+        {
+          stageNumber: 3,
+          stage: 'Recovery Assessment',
+          stageCode: 'RECOVERY_ASSESSMENT',
+          status: 'COMPLETED',
+          event: 'REVENUE_RISK_EVALUATED',
+          summary: isRecovered 
+            ? `Revenue risk resolved — ${currency} ${recoveredRevenue} net revenue recovered`
+            : `Evaluated revenue-at-risk (${currency} ${amount})`,
+          details: {
+            revenueAtRisk: amount,
+            recoveredRevenue,
+            currency,
+            recoveryOpportunity: isRecovered ? false : Boolean(sess.recoveryAssessment?.assessment?.recoveryOpportunity),
+            recoverable: !isRecovered
+          }
+        },
+        {
+          stageNumber: 4,
+          stage: 'Action Planning',
+          stageCode: 'ACTION_PLANNING',
+          status: 'COMPLETED',
+          event: isRecovered ? 'RECOVERY_COMPLETED' : 'RECOVERY_ACTION_PLANNED',
+          summary: isRecovered 
+            ? 'Recovery opportunity successfully resolved — Status: RECOVERED'
+            : `Recommended recovery action: ${recommendedAction} via ${channel}`,
+          details: {
+            recommendedAction,
+            channel,
+            urgency: isRecovered ? 'COMPLETED' : (priority === 'CRITICAL' ? 'IMMEDIATE' : 'STANDARD'),
+            templateId: isRecovered ? 'tpl_recovery_resolved' : `tpl_recovery_outreach_${failureCode.toLowerCase()}`
+          }
+        },
+        {
+          stageNumber: 5,
+          stage: 'Outreach Execution',
+          stageCode: 'OUTREACH_EXECUTION',
+          status: isRecovered ? 'COMPLETED' : (isExecuted ? 'SIMULATED' : 'PENDING'),
+          event: isRecovered 
+            ? 'RECOVERY_OUTCOME_RESOLVED' 
+            : (isExecuted ? 'SIMULATED_RECOVERY_OUTREACH_EXECUTED' : 'AWAITING_SIMULATED_EXECUTION'),
+          summary: isRecovered 
+            ? `Payment recovery completed via customer retry. ${currency} ${recoveredRevenue} net revenue recovered.` 
+            : (isExecuted 
+                ? 'Simulated customer recovery outreach execution completed' 
+                : 'Outreach action planned and ready for simulated execution'),
+          details: {
+            executionId: isRecovered 
+              ? (sess.recoveryOutcome?.recoveryId || `recovery_${sess.retryResult?.id || 'demo'}`)
+              : (sess.recoveryExecution?.executionId || `exec_pending_${sess.attemptEvent?.id || 'demo'}`),
+            executionStatus: isRecovered ? 'RECOVERED' : (isExecuted ? 'SIMULATED' : 'NOT_EXECUTED'),
+            outcome: isRecovered ? 'RECOVERED' : (isExecuted ? 'SIMULATED_SUCCESS' : 'PENDING'),
+            recoveredRevenue,
+            currency
+          }
+        }
+      ]
+    };
+  }
 
   return {
     agentStatus: 'AUTONOMOUS_ACTIVE',
@@ -134,6 +267,25 @@ const PRIORITY_RANKS = {
 export function evaluateAgentPolicy(agentState, policy) {
   const baseState = agentState || getAgentConsoleState();
   const currentPolicy = policy || getAgentPolicyDefaults();
+
+  const actionStage = baseState.pipeline.find(s => s.stageCode === 'ACTION_PLANNING');
+  const baseAction = actionStage?.details?.recommendedAction || 'RECOVERY_OUTREACH';
+
+  // If the opportunity is already RECOVERED, NO_ACTION, or NO_ACTIVE_RECOVERY, return terminal evaluation
+  if (baseAction === 'RECOVERED' || baseAction === 'NO_ACTION' || baseAction === 'NO_ACTIVE_RECOVERY' || baseState.executionStreamStatus === 'COMPLETED') {
+    return {
+      baseAction: baseAction === 'RECOVERY_OUTREACH' ? 'RECOVERED' : baseAction,
+      evaluatedAction: baseAction === 'RECOVERY_OUTREACH' ? 'RECOVERED' : baseAction,
+      policyReason: baseAction === 'RECOVERED' || baseState.executionStreamStatus === 'COMPLETED'
+        ? 'Opportunity successfully recovered — No further outreach required.'
+        : 'No active recovery action required.',
+      policyApplied: {
+        autoOutreachEnabled: currentPolicy.autoOutreachEnabled,
+        minPriorityThreshold: currentPolicy.minPriorityThreshold,
+        maxRetryLimit: currentPolicy.maxRetryLimit
+      }
+    };
+  }
 
   const priorityStage = baseState.pipeline.find(s => s.stageCode === 'PRIORITY_SCORING');
   const currentPriority = priorityStage ? priorityStage.details.priority : 'CRITICAL';

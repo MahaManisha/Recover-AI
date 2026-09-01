@@ -7,6 +7,8 @@ import { Checkout } from '../pages/Checkout';
 import { Payment } from '../pages/Payment';
 import { Agent } from '../pages/Agent';
 import { Merchant } from '../pages/Merchant';
+import { AuditConsole } from '../pages/AuditConsole';
+import { BenchmarkConsole } from '../pages/BenchmarkConsole';
 import { Login } from '../pages/Login';
 import { Register } from '../pages/Register';
 import { ProtectedRoute } from '../components/auth/ProtectedRoute';
@@ -104,6 +106,26 @@ export function AppRoutes() {
             element={
               <ProtectedRoute requiredRole="MERCHANT">
                 <Agent />
+              </ProtectedRoute>
+            } 
+          />
+
+          {/* Protected Compliance Audit Route */}
+          <Route 
+            path="/audit" 
+            element={
+              <ProtectedRoute requiredRole="MERCHANT">
+                <AuditConsole />
+              </ProtectedRoute>
+            } 
+          />
+
+          {/* Protected Batch Recovery Benchmark Route */}
+          <Route 
+            path="/benchmark" 
+            element={
+              <ProtectedRoute requiredRole="MERCHANT">
+                <BenchmarkConsole />
               </ProtectedRoute>
             } 
           />

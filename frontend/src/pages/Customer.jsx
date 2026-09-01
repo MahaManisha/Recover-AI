@@ -1,12 +1,23 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Cpu, Loader2, ShoppingBag, Sparkles } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { useRecovery } from '../context/RecoveryContext';
 import { CustomerProfileCard } from '../components/customer/CustomerProfileCard';
 import { ProductCard } from '../components/customer/ProductCard';
-import { DEMO_PRODUCT } from '../data/demoProduct';
 
 export function Customer() {
   const { user, loading } = useAuth();
+  const { merchantProducts, activeMerchantId, productsLoading, productsError } = useRecovery();
+
+  const visibleProducts = useMemo(() => {
+    const targetMerchantId = activeMerchantId;
+    if (!targetMerchantId) {
+      return [];
+    }
+    return (merchantProducts || []).filter(
+      (p) => p.merchantId === targetMerchantId && p.active !== false
+    );
+  }, [merchantProducts, activeMerchantId]);
 
   if (loading) {
     return (
@@ -63,8 +74,27 @@ export function Customer() {
           </div>
         </div>
 
-        {/* Render Product Card */}
-        <ProductCard product={DEMO_PRODUCT} />
+        {/* Render Merchant-Owned Product Cards */}
+        <div className="space-y-4">
+          {productsLoading ? (
+            <div className="p-8 text-center bg-slate-900/80 rounded-2xl border border-slate-800 text-slate-400 text-sm flex items-center justify-center gap-2">
+              <Loader2 className="h-5 w-5 text-cyan-400 animate-spin" />
+              <span>Loading products from database...</span>
+            </div>
+          ) : productsError ? (
+            <div className="p-8 text-center bg-rose-950/40 rounded-2xl border border-rose-800/60 text-rose-300 text-sm font-semibold">
+              Unable to load merchant products from database.
+            </div>
+          ) : visibleProducts.length > 0 ? (
+            visibleProducts.map((product) => (
+              <ProductCard key={product.id || product.productId} product={product} />
+            ))
+          ) : (
+            <div className="p-8 text-center bg-slate-900/80 rounded-2xl border border-slate-800 text-slate-400 text-sm">
+              No products currently available from this merchant.
+            </div>
+          )}
+        </div>
       </section>
 
     </div>

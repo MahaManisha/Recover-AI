@@ -172,4 +172,40 @@ export async function getCurrentUser() {
   }
 }
 
+/**
+ * Product Catalog Service Call: GET /api/merchant/products
+ */
+export async function fetchMerchantProducts(merchantId) {
+  try {
+    const query = merchantId ? `?merchantId=${encodeURIComponent(merchantId)}` : '';
+    const products = await request(`/merchant/products${query}`);
+    return { success: true, data: products };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message || formatErrorMessage(error),
+      data: []
+    };
+  }
+}
+
+/**
+ * Product Catalog Service Call: POST /api/merchant/products
+ */
+export async function createMerchantProduct(productData) {
+  try {
+    const createdProduct = await request('/merchant/products', {
+      method: 'POST',
+      body: JSON.stringify(productData),
+    });
+    return { success: true, data: createdProduct };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message || formatErrorMessage(error)
+    };
+  }
+}
+
 export const fetchBackendHealth = checkBackendHealth;
+

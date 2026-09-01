@@ -12,11 +12,15 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { useRecovery } from '../../context/RecoveryContext';
 import { DEMO_PRODUCT } from '../../data/demoProduct';
 
-export function PurchaseSummary({ product = DEMO_PRODUCT, onContinue, onBack }) {
+export function PurchaseSummary({ product: propProduct, onContinue, onBack }) {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { selectedProduct } = useRecovery();
+
+  const product = propProduct || selectedProduct || DEMO_PRODUCT;
 
   const handleBack = () => {
     if (onBack) {

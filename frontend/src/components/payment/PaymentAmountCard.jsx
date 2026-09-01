@@ -12,7 +12,8 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { DEMO_PRODUCT } from '../../data/demoProduct';
+import { useRecovery } from '../../context/RecoveryContext';
+import { DEMO_PRODUCT, DEFAULT_DEMO_MERCHANT_ID } from '../../data/demoProduct';
 import { createPaymentAttempt } from '../../services/paymentEvents';
 import { PaymentMethodSelector } from './PaymentMethodSelector';
 import { PaymentScenarioSelector } from './PaymentScenarioSelector';
@@ -44,9 +45,13 @@ const INITIAL_FORM_DATA = {
   selectedBank: ''
 };
 
-export function PaymentAmountCard({ product = DEMO_PRODUCT, onContinue, onBack }) {
+export function PaymentAmountCard({ product: propProduct, onContinue, onBack }) {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { selectedProduct, setActiveRecoverySession, appendRecoveryEvent, appendAuditLog } = useRecovery();
+  
+  const activeProduct = propProduct || selectedProduct || DEMO_PRODUCT;
+  const product = activeProduct;
   
   // Page state: 'IDLE' | 'PROCESSING' | 'WAITING_FOR_RESULT'
   const [paymentState, setPaymentState] = useState('IDLE');
@@ -83,6 +88,29 @@ export function PaymentAmountCard({ product = DEMO_PRODUCT, onContinue, onBack }
     if (recoveryActionPlan && recoveryOutreachMessage) {
       const result = executeRecoveryAction(recoveryActionPlan, recoveryOutreachMessage);
       setRecoveryExecution(result);
+
+      setActiveRecoverySession(prev => prev ? {
+        ...prev,
+        recoveryExecution: result
+      } : null);
+
+      if (result) {
+        appendAuditLog({
+          auditId: `aud_exec_${result.executionId}`,
+          eventType: 'RECOVERY_EXECUTION_SIMULATED',
+          source: 'AGENT_CONSOLE',
+          actor: 'Autonomous AI Agent',
+          status: 'SIMULATED',
+          timestamp: result.timestamp || new Date().toISOString(),
+          isSimulated: true,
+          metadata: {
+            executionId: result.executionId,
+            channel: result.channel,
+            dispatchResult: result.outcome,
+            details: 'Outreach execution simulated successfully. Customer notification dispatched.'
+          }
+        });
+      }
     }
   };
 
@@ -187,10 +215,12 @@ export function PaymentAmountCard({ product = DEMO_PRODUCT, onContinue, onBack }
     setCustomerNotification(null);
     setRecoveryOutcome(null);
 
-    // If starting a completely fresh payment attempt (not a retry), reset failure context
+    // If starting a completely fresh payment attempt (not a retry), reset failure context and active session
     if (!isRetryAttempt) {
       setFirstFailedAttempt(null);
       setFirstFailedResult(null);
+      console.log('[PaymentAmountCard] setActiveRecoverySession SOURCE: handlePayAttempt (new non-retry attempt reset -> NULL)');
+      setActiveRecoverySession(null);
     }
 
     // 2. Transition state to PROCESSING
@@ -199,7 +229,9 @@ export function PaymentAmountCard({ product = DEMO_PRODUCT, onContinue, onBack }
     // 3. Create PAYMENT_ATTEMPTED event with safe metadata ONLY
     const attemptEvent = createPaymentAttempt({
       customerId: user?.id || user?.email || 'customer_demo',
-      productId: product.id || 'ai-fullstack-program',
+      merchantId: product.merchantId || DEFAULT_DEMO_MERCHANT_ID,
+      productId: product.productId || product.id || 'prod_ai_fullstack_001',
+      productName: product.name || 'AI & Full-Stack Development Program',
       amount: product.price || 2000,
       currency: product.currency || 'INR',
       paymentMethod: selectedMethod,
@@ -221,17 +253,25 @@ export function PaymentAmountCard({ product = DEMO_PRODUCT, onContinue, onBack }
       outcome,
       attemptEvent,
       customerId: user?.id || user?.email || 'customer_demo',
-      productId: product.id || 'ai-fullstack-program',
+      merchantId: product.merchantId || DEFAULT_DEMO_MERCHANT_ID,
+      productId: product.productId || product.id || 'prod_ai_fullstack_001',
+      productName: product.name || 'AI & Full-Stack Development Program',
       amount: product.price || 2000,
       currency: product.currency || 'INR',
       paymentMethod: selectedMethod
     });
     setPaymentResultEvent(resultEvent);
 
+    const activeCustomerId = user?.id || user?.email || resultEvent.customerId;
+
     // 7. Generate Revenue Risk, Signals, Priority, Assessment, Decision, Plan, Outreach Message & Notification if PAYMENT_FAILED
     if (resultEvent.type === 'PAYMENT_FAILED') {
       // Store first failure context for retry correlation if not already set
-      if (!firstFailedAttempt) {
+      let currentFirstAttempt = firstFailedAttempt;
+      let currentFirstResult = firstFailedResult;
+      if (!currentFirstAttempt) {
+        currentFirstAttempt = attemptEvent;
+        currentFirstResult = resultEvent;
         setFirstFailedAttempt(attemptEvent);
         setFirstFailedResult(resultEvent);
       }
@@ -239,7 +279,6 @@ export function PaymentAmountCard({ product = DEMO_PRODUCT, onContinue, onBack }
       const riskContext = createRevenueRiskContext(resultEvent);
       setRevenueRiskContext(riskContext);
       
-      const activeCustomerId = user?.id || user?.email || resultEvent.customerId;
       const signals = getDemoCustomerRecoverySignals(activeCustomerId);
       setCustomerRecoverySignals(signals);
 
@@ -262,6 +301,118 @@ export function PaymentAmountCard({ product = DEMO_PRODUCT, onContinue, onBack }
       const notif = createCustomerRecoveryNotification(assessment, decision, plan, outreachMsg);
       setCustomerNotification(notif);
       setRecoveryOutcome(null);
+
+      // Publish Runtime Session & Events to Shared Recovery Context
+      const activeSession = {
+        customerId: activeCustomerId,
+        merchantId: product.merchantId || DEFAULT_DEMO_MERCHANT_ID,
+        productId: product.productId || product.id || 'prod_ai_fullstack_001',
+        productName: product.name || 'AI & Full-Stack Development Program',
+        amount: product.price || 2000,
+        currency: product.currency || 'INR',
+        paymentMethod: selectedMethod,
+        failureCode: resultEvent.failureCode || 'SERVER_ERROR',
+        currentStatus: 'FAILED',
+        attemptEvent,
+        resultEvent,
+        revenueRiskContext: riskContext,
+        customerSignals: signals,
+        recoveryPriority: priority,
+        recoveryAssessment: assessment,
+        recoveryDecision: decision,
+        recoveryActionPlan: plan,
+        outreachMessage: outreachMsg,
+        recoveryNotification: notif,
+        recoveryExecution: null,
+        retryAttempt: isRetryAttempt ? attemptEvent : null,
+        recoveryOutcome: null
+      };
+      setActiveRecoverySession(activeSession);
+
+      const runtimeActivityRecord = {
+        activityId: `act_${resultEvent.id}`,
+        customerId: activeCustomerId,
+        merchantId: product.merchantId || DEFAULT_DEMO_MERCHANT_ID,
+        productId: product.productId || product.id || 'prod_ai_fullstack_001',
+        productName: product.name || 'AI & Full-Stack Development Program',
+        failureCode: resultEvent.failureCode || 'SERVER_ERROR',
+        failureReason: assessment?.assessment?.failureSummary || 'Payment processing error',
+        priority: priority?.priority || 'CRITICAL',
+        priorityScore: priority?.score || 85,
+        recommendedAction: decision?.recommendedAction || 'RECOVERY_OUTREACH',
+        channel: plan?.channel || 'EMAIL',
+        status: 'PENDING',
+        amount: product.price || 2000,
+        recoveredAmount: 0,
+        currency: product.currency || 'INR',
+        retryCount: isRetryAttempt ? retryCount : 1,
+        timestamp: resultEvent.timestamp
+      };
+      appendRecoveryEvent(runtimeActivityRecord);
+
+      // Append Runtime Audit Logs
+      appendAuditLog({
+        auditId: `aud_fail_${resultEvent.id}`,
+        eventType: 'PAYMENT_FAILED',
+        source: 'CUSTOMER_PORTAL',
+        actor: `Customer (${activeCustomerId})`,
+        status: 'FAILED',
+        timestamp: resultEvent.timestamp,
+        isSimulated: true,
+        metadata: {
+          customerId: activeCustomerId,
+          productId: product.id || 'ai-fullstack-program',
+          paymentAttemptId: attemptEvent.id,
+          amount: product.price || 2000,
+          currency: product.currency || 'INR',
+          failureCode: resultEvent.failureCode,
+          details: `Simulated payment attempt failed with ${resultEvent.failureCode}.`
+        }
+      });
+
+      if (decision) {
+        appendAuditLog({
+          auditId: `aud_dec_${decision.decisionId}`,
+          eventType: 'RECOVERY_DECISION',
+          source: 'AGENT_CONSOLE',
+          actor: 'Autonomous AI Agent',
+          status: 'COMPLETED',
+          timestamp: decision.timestamp,
+          isSimulated: true,
+          metadata: {
+            customerId: activeCustomerId,
+            productId: product.id || 'ai-fullstack-program',
+            paymentAttemptId: attemptEvent.id,
+            amount: product.price || 2000,
+            currency: product.currency || 'INR',
+            failureCode: resultEvent.failureCode,
+            evaluatedPriority: priority?.priority || 'CRITICAL',
+            evaluatedScore: priority?.score || 85,
+            decisionAction: decision.recommendedAction,
+            details: decision.reason
+          }
+        });
+      }
+
+      if (plan) {
+        appendAuditLog({
+          auditId: `aud_plan_${plan.actionPlanId}`,
+          eventType: 'RECOVERY_ACTION_PLAN',
+          source: 'AGENT_CONSOLE',
+          actor: 'Autonomous AI Agent',
+          status: 'COMPLETED',
+          timestamp: plan.timestamp,
+          isSimulated: true,
+          metadata: {
+            customerId: activeCustomerId,
+            productId: product.id || 'ai-fullstack-program',
+            channel: plan.channel,
+            actionType: plan.actionType,
+            draftMessage: outreachMsg?.subject || 'Action Required: Complete your purchase',
+            details: plan.reason
+          }
+        });
+      }
     } else {
       // PAYMENT_SUCCESS
       setRevenueRiskContext(null);
@@ -278,11 +429,128 @@ export function PaymentAmountCard({ product = DEMO_PRODUCT, onContinue, onBack }
       const origAttempt = firstFailedAttempt || (isRetryAttempt && lastAttemptEvent ? lastAttemptEvent : null);
       const origResult = firstFailedResult;
       
+      let recoveryOutcomeObj = null;
       if (isRetryAttempt && origAttempt && origResult) {
-        const recoveryOutcomeObj = createRecoveryOutcome(origAttempt, origResult, attemptEvent, resultEvent);
+        recoveryOutcomeObj = createRecoveryOutcome(origAttempt, origResult, attemptEvent, resultEvent);
         setRecoveryOutcome(recoveryOutcomeObj);
       } else {
         setRecoveryOutcome(null);
+      }
+
+      console.log('[PaymentAmountCard] PAYMENT_SUCCESS', {
+        customerId: activeCustomerId,
+        amount: product.price || 2000,
+        isRetryAttempt,
+        hasOrigAttempt: Boolean(origAttempt),
+        hasOrigResult: Boolean(origResult)
+      });
+
+      if (isRetryAttempt && origAttempt && origResult && recoveryOutcomeObj) {
+        console.log('[PaymentAmountCard] RECOVERY_OUTCOME', {
+          recoveryStatus: recoveryOutcomeObj.recoveryStatus,
+          recoveredRevenue: recoveryOutcomeObj.recoveredRevenue,
+          timestamp: recoveryOutcomeObj.timestamp
+        });
+
+        // Successful Retry Flow — Ensure activeRecoverySession is NEVER set to null
+        setActiveRecoverySession(prev => {
+          const baseSession = prev || {
+            customerId: activeCustomerId,
+            merchantId: origAttempt.merchantId || product.merchantId || DEFAULT_DEMO_MERCHANT_ID,
+            productId: origAttempt.productId || product.productId || product.id || 'prod_ai_fullstack_001',
+            productName: origAttempt.productName || product.name || 'AI & Full-Stack Development Program',
+            amount: origAttempt.amount || product.price || 2000,
+            currency: product.currency || 'INR',
+            paymentMethod: selectedMethod,
+            failureCode: origResult.failureCode || 'SERVER_ERROR',
+            attemptEvent: origAttempt,
+            resultEvent: origResult
+          };
+
+          return {
+            ...baseSession,
+            retryAttempt: attemptEvent,
+            retryResult: resultEvent,
+            recoveryOutcome: recoveryOutcomeObj,
+            currentStatus: 'RECOVERED'
+          };
+        });
+
+        const runtimeRecoveredRecord = {
+          activityId: `act_${origResult.id}`,
+          customerId: origAttempt.customerId || activeCustomerId,
+          merchantId: origAttempt.merchantId || product.merchantId || DEFAULT_DEMO_MERCHANT_ID,
+          productId: origAttempt.productId || product.productId || product.id || 'prod_ai_fullstack_001',
+          productName: origAttempt.productName || product.name || 'AI & Full-Stack Development Program',
+          failureCode: origResult.failureCode || 'SERVER_ERROR',
+          failureReason: 'Recovered via customer payment retry',
+          priority: 'CRITICAL',
+          priorityScore: 85,
+          recommendedAction: 'RECOVERED',
+          channel: 'EMAIL',
+          status: 'RECOVERED',
+          amount: origAttempt.amount || 2000,
+          recoveredAmount: recoveryOutcomeObj.recoveredRevenue || 2000,
+          currency: recoveryOutcomeObj.currency || 'INR',
+          retryCount: retryCount || 1,
+          timestamp: recoveryOutcomeObj.timestamp
+        };
+        appendRecoveryEvent(runtimeRecoveredRecord);
+
+        appendAuditLog({
+          auditId: `aud_retry_${attemptEvent.id}`,
+          eventType: 'CUSTOMER_RETRY',
+          source: 'CUSTOMER_PORTAL',
+          actor: `Customer (${origAttempt.customerId || activeCustomerId})`,
+          status: 'COMPLETED',
+          timestamp: attemptEvent.timestamp,
+          isSimulated: true,
+          metadata: {
+            customerId: origAttempt.customerId || activeCustomerId,
+            productId: origAttempt.productId || 'ai-fullstack-program',
+            paymentAttemptId: attemptEvent.id,
+            retryStatus: 'PAYMENT_SUCCESS',
+            details: 'Customer completed payment retry attempt successfully.'
+          }
+        });
+
+        appendAuditLog({
+          auditId: `aud_outcome_${recoveryOutcomeObj.recoveryId}`,
+          eventType: 'RECOVERY_OUTCOME',
+          source: 'RULE_ENGINE',
+          actor: 'RecoverAI System',
+          status: 'COMPLETED',
+          timestamp: recoveryOutcomeObj.timestamp,
+          isSimulated: true,
+          metadata: {
+            recoveryOutcome: 'RECOVERED',
+            recoveredAmount: recoveryOutcomeObj.recoveredRevenue,
+            currency: recoveryOutcomeObj.currency,
+            customerId: recoveryOutcomeObj.customerId,
+            details: `Payment recovery completed. ₹${recoveryOutcomeObj.recoveredRevenue} INR net revenue recovered.`
+          }
+        });
+      } else {
+        // Initial Payment Success Flow (No recovery opportunity needed)
+        setActiveRecoverySession(null);
+
+        appendAuditLog({
+          auditId: `aud_success_${resultEvent.id}`,
+          eventType: 'PAYMENT_SUCCESS',
+          source: 'CUSTOMER_PORTAL',
+          actor: `Customer (${activeCustomerId})`,
+          status: 'SUCCESS',
+          timestamp: resultEvent.timestamp,
+          isSimulated: true,
+          metadata: {
+            customerId: activeCustomerId,
+            productId: product.id || 'ai-fullstack-program',
+            paymentAttemptId: attemptEvent.id,
+            amount: product.price || 2000,
+            currency: product.currency || 'INR',
+            details: 'Initial payment attempt completed successfully.'
+          }
+        });
       }
     }
 

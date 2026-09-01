@@ -37,7 +37,7 @@ const DEFAULT_DEMO_ACTIVITY = [
  * @returns {Object} Calculated merchant recovery analytics schema with breakdowns
  */
 export function getMerchantRecoveryMetrics(recoveryHistory = null) {
-  const isDefaultDemo = !Array.isArray(recoveryHistory) || recoveryHistory.length === 0;
+  const isDefaultDemo = recoveryHistory === null;
   const historyToProcess = isDefaultDemo ? DEFAULT_DEMO_ACTIVITY : recoveryHistory;
 
   let totalRevenueAtRisk = 0;
@@ -68,7 +68,8 @@ export function getMerchantRecoveryMetrics(recoveryHistory = null) {
 
   const formattedActivity = historyToProcess.map((item, index) => {
     const amount = Number(item.amount || item.revenueAtRisk) || 0;
-    const recovered = Number(item.recoveredRevenue || (item.status === 'RECOVERED' ? amount : 0)) || 0;
+    const isRec = item.status === 'RECOVERED' || Boolean(item.recoveredAmount && item.recoveredAmount > 0);
+    const recovered = Number(item.recoveredRevenue || item.recoveredAmount || (isRec ? amount : 0)) || 0;
     
     totalRevenueAtRisk += amount;
     totalRecoveredRevenue += recovered;
@@ -88,14 +89,15 @@ export function getMerchantRecoveryMetrics(recoveryHistory = null) {
       priorityBreakdown[priority] = 1;
     }
 
-    const action = item.recommendedAction || item.actionType || 'RECOVERY_OUTREACH';
+    const rawAction = item.recommendedAction || item.actionType || 'RECOVERY_OUTREACH';
+    const action = isRec ? 'RECOVERED' : rawAction;
     if (actionBreakdown[action] !== undefined) {
       actionBreakdown[action] += 1;
     } else {
       actionBreakdown[action] = 1;
     }
 
-    if (item.status === 'RECOVERED' || recovered > 0) {
+    if (isRec) {
       totalRecoveredCount += 1;
     }
 
@@ -118,7 +120,7 @@ export function getMerchantRecoveryMetrics(recoveryHistory = null) {
       priorityScore: Number(item.priorityScore) || 85,
       recommendedAction: action,
       channel: item.channel || 'EMAIL',
-      status: item.status || (recovered > 0 ? 'RECOVERED' : 'PENDING'),
+      status: isRec ? 'RECOVERED' : (item.status || 'PENDING'),
       amount: amount,
       recoveredAmount: recovered,
       currency: item.currency || currency,

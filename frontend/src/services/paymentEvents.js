@@ -4,12 +4,14 @@
  * Strictly excludes any sensitive payment credentials.
  */
 
-export function createPaymentAttempt({ customerId, productId, amount, currency, paymentMethod, retryCount, retryOfAttemptId }) {
+export function createPaymentAttempt({ customerId, merchantId, productId, productName, amount, currency, paymentMethod, retryCount, retryOfAttemptId }) {
   const attempt = {
     id: `att_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
     type: "PAYMENT_ATTEMPTED",
     customerId: customerId || "customer_demo",
-    productId: productId || "ai-fullstack-program",
+    merchantId: merchantId || "merchant_001",
+    productId: productId || "prod_ai_fullstack_001",
+    productName: productName || "AI & Full-Stack Development Program",
     amount: Number(amount) || 2000,
     currency: currency || "INR",
     paymentMethod: paymentMethod, // "UPI" | "CARD" | "NET_BANKING"
