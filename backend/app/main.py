@@ -8,6 +8,7 @@ from app.core.database import engine, Base
 # Import models to ensure they are registered with SQLAlchemy metadata
 import app.models.user
 import app.models.product
+import app.models.recovery
 
 # Create database tables automatically for development execution
 Base.metadata.create_all(bind=engine)

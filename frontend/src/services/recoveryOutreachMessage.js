@@ -43,11 +43,11 @@ export function generateRecoveryOutreachMessage(
   }
 
   const customerName = userProfile?.full_name || userProfile?.name || 'Valued Customer';
-  const productName = recoveryAssessment.productId === 'ai-fullstack-program'
+  const productName = recoveryAssessment.productName || (recoveryAssessment.productId === 'ai-fullstack-program'
     ? 'AI & Full-Stack Development Program'
-    : (recoveryAssessment.productId || 'Demo Course');
+    : (recoveryAssessment.productId || 'Selected Product'));
 
-  const amount = Number(recoveryAssessment.amount || recoveryAssessment.revenueAtRisk) || 2000;
+  const amount = Number(recoveryAssessment.amount || recoveryAssessment.revenueAtRisk) || 0;
   const currency = recoveryAssessment.currency || 'INR';
 
   const formattedAmount = new Intl.NumberFormat('en-IN', {

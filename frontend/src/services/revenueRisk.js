@@ -20,15 +20,15 @@ export function createRevenueRiskContext(paymentFailedEvent) {
     return null;
   }
 
-  const amount = Number(paymentFailedEvent.amount) || 2000;
+  const amount = typeof paymentFailedEvent.amount === 'number' ? paymentFailedEvent.amount : (Number(paymentFailedEvent.amount) || 0);
 
   return {
     paymentAttemptId: paymentFailedEvent.attemptId || 'att_unknown',
     paymentResultId: paymentFailedEvent.id || 'result_unknown',
     customerId: paymentFailedEvent.customerId || 'customer_demo',
-    merchantId: paymentFailedEvent.merchantId || 'merchant_001',
-    productId: paymentFailedEvent.productId || 'prod_ai_fullstack_001',
-    productName: paymentFailedEvent.productName || 'AI & Full-Stack Development Program',
+    merchantId: paymentFailedEvent.merchantId,
+    productId: paymentFailedEvent.productId,
+    productName: paymentFailedEvent.productName,
     amount: amount,
     currency: paymentFailedEvent.currency || 'INR',
     revenueAtRisk: amount, // Potential purchase value at risk if customer abandons

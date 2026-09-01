@@ -8,6 +8,9 @@ import { fetchMerchantProducts, createMerchantProduct } from '../services/api';
  */
 
 const STORAGE_KEY_ACTIVE_MERCHANT = 'recoverai_active_merchant_id';
+const STORAGE_KEY_SELECTED_PRODUCT = 'recoverai_selected_product';
+const STORAGE_KEY_ACTIVE_RECOVERY_SESSION = 'recoverai_active_recovery_session';
+const STORAGE_KEY_RECOVERY_EVENTS = 'recoverai_recovery_events';
 
 function loadPersistedActiveMerchantId() {
   try {
@@ -21,14 +24,59 @@ function loadPersistedActiveMerchantId() {
   return DEFAULT_DEMO_MERCHANT_ID;
 }
 
+function loadPersistedSelectedProduct() {
+  try {
+    const stored = sessionStorage.getItem(STORAGE_KEY_SELECTED_PRODUCT);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed && typeof parsed === 'object' && (parsed.id || parsed.productId)) {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.error('[RecoveryContext] Error loading selected product:', err);
+  }
+  return null;
+}
+
+function loadPersistedActiveRecoverySession() {
+  try {
+    const stored = sessionStorage.getItem(STORAGE_KEY_ACTIVE_RECOVERY_SESSION);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed && typeof parsed === 'object') {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.error('[RecoveryContext] Error loading active recovery session:', err);
+  }
+  return null;
+}
+
+function loadPersistedRecoveryEvents() {
+  try {
+    const stored = sessionStorage.getItem(STORAGE_KEY_RECOVERY_EVENTS);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.error('[RecoveryContext] Error loading recovery events:', err);
+  }
+  return [];
+}
+
 const RecoveryContext = createContext(null);
 
 export function RecoveryProvider({ children }) {
   // Active recovery session for the current Customer opportunity
-  const [activeRecoverySession, setActiveRecoverySessionState] = useState(null);
+  const [activeRecoverySession, setActiveRecoverySessionState] = useState(() => loadPersistedActiveRecoverySession());
 
   // Array of runtime recovery activity records for Merchant activity log
-  const [recoveryEvents, setRecoveryEvents] = useState([]);
+  const [recoveryEvents, setRecoveryEvents] = useState(() => loadPersistedRecoveryEvents());
 
   // Array of runtime compliance audit entries
   const [auditLogs, setAuditLogs] = useState([]);
@@ -42,7 +90,7 @@ export function RecoveryProvider({ children }) {
   const [activeMerchantId, setActiveMerchantIdState] = useState(() => loadPersistedActiveMerchantId());
 
   // Currently selected product for customer purchase
-  const [selectedProduct, setSelectedProductState] = useState(INITIAL_MERCHANT_PRODUCTS[0]);
+  const [selectedProduct, setSelectedProductState] = useState(() => loadPersistedSelectedProduct());
 
   const refreshProducts = useCallback(async () => {
     setProductsLoading(true);
@@ -87,6 +135,19 @@ export function RecoveryProvider({ children }) {
 
   const setSelectedProduct = useCallback((product) => {
     setSelectedProductState(product);
+    if (product) {
+      try {
+        sessionStorage.setItem(STORAGE_KEY_SELECTED_PRODUCT, JSON.stringify(product));
+      } catch (err) {
+        console.error('[RecoveryContext] Error persisting selected product:', err);
+      }
+    } else {
+      try {
+        sessionStorage.removeItem(STORAGE_KEY_SELECTED_PRODUCT);
+      } catch (err) {
+        console.error('[RecoveryContext] Error removing selected product:', err);
+      }
+    }
   }, []);
 
   const addMerchantProduct = useCallback(async (productData) => {
@@ -159,6 +220,11 @@ export function RecoveryProvider({ children }) {
 
       if (!nextSession) {
         console.log('[RecoveryContext] AFTER UPDATE -> NULL');
+        try {
+          sessionStorage.removeItem(STORAGE_KEY_ACTIVE_RECOVERY_SESSION);
+        } catch (err) {
+          console.error('[RecoveryContext] Error removing active recovery session:', err);
+        }
         return null;
       }
 
@@ -178,6 +244,12 @@ export function RecoveryProvider({ children }) {
         timestamp: updated.lastUpdated
       });
 
+      try {
+        sessionStorage.setItem(STORAGE_KEY_ACTIVE_RECOVERY_SESSION, JSON.stringify(updated));
+      } catch (err) {
+        console.error('[RecoveryContext] Error persisting active recovery session:', err);
+      }
+
       return updated;
     });
   }, []);
@@ -195,15 +267,23 @@ export function RecoveryProvider({ children }) {
         (e) => (e.activityId || e.recoveryId || e.id) === eventId
       );
 
+      let updated;
       if (existingIndex >= 0) {
         // Update existing event record
-        const updated = [...prevEvents];
+        updated = [...prevEvents];
         updated[existingIndex] = { ...updated[existingIndex], ...eventRecord };
-        return updated;
+      } else {
+        // Prepend new runtime event (latest first)
+        updated = [eventRecord, ...prevEvents];
       }
 
-      // Prepend new runtime event (latest first)
-      return [eventRecord, ...prevEvents];
+      try {
+        sessionStorage.setItem(STORAGE_KEY_RECOVERY_EVENTS, JSON.stringify(updated));
+      } catch (err) {
+        console.error('[RecoveryContext] Error persisting recovery events:', err);
+      }
+
+      return updated;
     });
   }, []);
 
@@ -229,6 +309,11 @@ export function RecoveryProvider({ children }) {
    */
   const clearRecoverySession = useCallback(() => {
     setActiveRecoverySessionState(null);
+    try {
+      sessionStorage.removeItem(STORAGE_KEY_ACTIVE_RECOVERY_SESSION);
+    } catch (err) {
+      console.error('[RecoveryContext] Error removing active recovery session:', err);
+    }
   }, []);
 
   /**
@@ -238,6 +323,12 @@ export function RecoveryProvider({ children }) {
     setActiveRecoverySessionState(null);
     setRecoveryEvents([]);
     setAuditLogs([]);
+    try {
+      sessionStorage.removeItem(STORAGE_KEY_ACTIVE_RECOVERY_SESSION);
+      sessionStorage.removeItem(STORAGE_KEY_RECOVERY_EVENTS);
+    } catch (err) {
+      console.error('[RecoveryContext] Error removing persisted recovery state:', err);
+    }
     refreshProducts();
     setActiveMerchantId(DEFAULT_DEMO_MERCHANT_ID);
     setSelectedProductState(INITIAL_MERCHANT_PRODUCTS[0]);

@@ -1,5 +1,5 @@
 import React from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { 
   ArrowLeft, 
   CreditCard, 
@@ -17,6 +17,7 @@ import { DEMO_PRODUCT } from '../../data/demoProduct';
 
 export function PurchaseSummary({ product: propProduct, onContinue, onBack }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuth();
   const { selectedProduct } = useRecovery();
 
@@ -34,13 +35,13 @@ export function PurchaseSummary({ product: propProduct, onContinue, onBack }) {
     if (onContinue) {
       onContinue();
     } else {
-      navigate('/customer/payment');
+      navigate('/customer/payment', { state: location.state });
     }
   };
 
   // Programmatic amount calculation: quantity = 1
   const quantity = 1;
-  const unitPrice = Number(product?.price) || 2000;
+  const unitPrice = typeof product?.price === 'number' ? product.price : (Number(product?.price) || 0);
   const totalAmount = quantity * unitPrice;
 
   // Format currency values consistently (INR)

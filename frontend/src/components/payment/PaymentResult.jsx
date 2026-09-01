@@ -19,7 +19,8 @@ import {
   ClipboardList,
   Mail,
   Zap,
-  Play
+  Play,
+  RefreshCw
 } from 'lucide-react';
 
 import { CustomerRecoveryNotification } from '../customer/CustomerRecoveryNotification';
@@ -66,7 +67,8 @@ export function PaymentResult({
   }
 
   const isSuccess = paymentResultEvent.type === 'PAYMENT_SUCCESS';
-  const amount = Number(paymentResultEvent.amount) || 2000;
+  const amount = typeof paymentResultEvent.amount === 'number' ? paymentResultEvent.amount : (Number(paymentResultEvent.amount) || 0);
+  const displayProductName = paymentResultEvent.productName || productName;
   const formattedAmount = new Intl.NumberFormat('en-IN', {
     style: 'currency',
     currency: paymentResultEvent.currency || 'INR',
@@ -156,7 +158,7 @@ export function PaymentResult({
               Program
             </span>
             <span className="text-xs font-medium text-white truncate max-w-[220px]">
-              {productName}
+              {displayProductName}
             </span>
           </div>
 
@@ -618,11 +620,24 @@ export function PaymentResult({
         )}
 
         {/* M5 Page 2 Part 1 — Customer Recovery Notification Section */}
-        {!isSuccess && customerNotification && (
-          <CustomerRecoveryNotification 
-            notification={customerNotification} 
-            onRetryPayment={onRetryPayment} 
-          />
+        {!isSuccess && (
+          customerNotification ? (
+            <CustomerRecoveryNotification 
+              notification={customerNotification} 
+              onRetryPayment={onRetryPayment} 
+            />
+          ) : (
+            <div className="pt-2 relative z-10">
+              <button
+                type="button"
+                onClick={onRetryPayment}
+                className="w-full px-5 py-3.5 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 to-orange-500 text-white text-xs sm:text-sm font-bold shadow-lg transition-all inline-flex items-center justify-center gap-2 cursor-pointer focus:outline-none focus:ring-2 focus:ring-amber-400"
+              >
+                <RefreshCw className="h-4 w-4 text-white" />
+                <span>Retry Payment</span>
+              </button>
+            </div>
+          )
         )}
 
         {/* Action Button: Return to Customer Portal */}

@@ -82,7 +82,9 @@ export function decideRecoveryAction(recoveryAssessment) {
     paymentAttemptId: recoveryAssessment.paymentAttemptId || 'att_unknown',
     paymentResultId: recoveryAssessment.paymentResultId || 'result_unknown',
     customerId: recoveryAssessment.customerId || 'customer_demo',
-    productId: recoveryAssessment.productId || 'ai-fullstack-program',
+    merchantId: recoveryAssessment.merchantId,
+    productId: recoveryAssessment.productId,
+    productName: recoveryAssessment.productName,
 
     revenueAtRisk: Number(recoveryAssessment.revenueAtRisk || recoveryAssessment.amount) || 2000,
     currency: recoveryAssessment.currency || 'INR',

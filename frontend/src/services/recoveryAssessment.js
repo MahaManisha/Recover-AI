@@ -94,7 +94,9 @@ export function createRecoveryAssessment(revenueRiskContext, recoveryPriority, c
     paymentAttemptId: revenueRiskContext.paymentAttemptId || 'att_unknown',
     paymentResultId: revenueRiskContext.paymentResultId || 'result_unknown',
     customerId: revenueRiskContext.customerId || customerRecoverySignals?.customerId || 'customer_demo',
-    productId: revenueRiskContext.productId || 'ai-fullstack-program',
+    merchantId: revenueRiskContext.merchantId,
+    productId: revenueRiskContext.productId,
+    productName: revenueRiskContext.productName,
 
     amount: amount,
     currency: currency,

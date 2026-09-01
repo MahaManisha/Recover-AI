@@ -1,13 +1,16 @@
 import React, { useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Cpu, Loader2, ShoppingBag, Sparkles } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useRecovery } from '../context/RecoveryContext';
 import { CustomerProfileCard } from '../components/customer/CustomerProfileCard';
 import { ProductCard } from '../components/customer/ProductCard';
+import { CustomerRecoveryNotification } from '../components/customer/CustomerRecoveryNotification';
 
 export function Customer() {
+  const navigate = useNavigate();
   const { user, loading } = useAuth();
-  const { merchantProducts, activeMerchantId, productsLoading, productsError } = useRecovery();
+  const { merchantProducts, activeMerchantId, productsLoading, productsError, activeRecoverySession } = useRecovery();
 
   const visibleProducts = useMemo(() => {
     const targetMerchantId = activeMerchantId;
@@ -18,6 +21,22 @@ export function Customer() {
       (p) => p.merchantId === targetMerchantId && p.active !== false
     );
   }, [merchantProducts, activeMerchantId]);
+
+  const handlePortalRetry = () => {
+    if (!activeRecoverySession) return;
+    navigate('/customer/payment', {
+      state: {
+        isRetryAttempt: true,
+        isRetry: true,
+        activityId: activeRecoverySession.activityId,
+        merchantId: activeRecoverySession.merchantId,
+        productId: activeRecoverySession.productId,
+        productName: activeRecoverySession.productName,
+        amount: activeRecoverySession.amount,
+        failureCode: activeRecoverySession.failureCode || 'SERVER_ERROR'
+      }
+    });
+  };
 
   if (loading) {
     return (
@@ -53,6 +72,24 @@ export function Customer() {
           <span>Secured by RecoverAI Agent Engine</span>
         </div>
       </div>
+
+      {/* Active Failed Payment Recovery Notification Banner */}
+      {activeRecoverySession && activeRecoverySession.currentStatus === 'FAILED' && (
+        <section aria-label="Failed Payment Recovery Notification">
+          <CustomerRecoveryNotification 
+            notification={activeRecoverySession.recoveryNotification || {
+              title: 'Action Required: Retry Failed Payment',
+              message: `Your payment of ₹${activeRecoverySession.amount} for "${activeRecoverySession.productName}" failed due to a server error. Click below to retry and complete your order.`,
+              recommendedAction: 'RETRY_PAYMENT',
+              reason: 'SERVER_ERROR',
+              productName: activeRecoverySession.productName,
+              amount: activeRecoverySession.amount,
+              currency: activeRecoverySession.currency || 'INR'
+            }}
+            onRetryPayment={handlePortalRetry}
+          />
+        </section>
+      )}
 
       {/* 2. Customer Profile Card */}
       <section aria-labelledby="profile-section-heading">

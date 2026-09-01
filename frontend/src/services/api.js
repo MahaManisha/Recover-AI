@@ -207,5 +207,61 @@ export async function createMerchantProduct(productData) {
   }
 }
 
+/**
+ * Recovery Event Service Call: POST /api/recovery/events
+ */
+export async function createBackendRecoveryEvent(eventData) {
+  try {
+    const data = await request('/recovery/events', {
+      method: 'POST',
+      body: JSON.stringify(eventData),
+    });
+    return { success: true, data };
+  } catch (error) {
+    console.error('[API] Failed to persist recovery event in database:', error);
+    return {
+      success: false,
+      error: error.message || formatErrorMessage(error)
+    };
+  }
+}
+
+/**
+ * Recovery Event Service Call: GET /api/recovery/events
+ */
+export async function fetchBackendRecoveryEvents(merchantId) {
+  try {
+    const query = merchantId ? `?merchantId=${encodeURIComponent(merchantId)}` : '';
+    const events = await request(`/recovery/events${query}`);
+    return { success: true, data: events };
+  } catch (error) {
+    console.error('[API] Failed to fetch recovery events from database:', error);
+    return {
+      success: false,
+      error: error.message || formatErrorMessage(error),
+      data: []
+    };
+  }
+}
+
+/**
+ * Recovery Event Service Call: PUT /api/recovery/events/{eventId}
+ */
+export async function updateBackendRecoveryEvent(eventId, updateData) {
+  try {
+    const data = await request(`/recovery/events/${encodeURIComponent(eventId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(updateData),
+    });
+    return { success: true, data };
+  } catch (error) {
+    console.error('[API] Failed to update recovery event in database:', error);
+    return {
+      success: false,
+      error: error.message || formatErrorMessage(error)
+    };
+  }
+}
+
 export const fetchBackendHealth = checkBackendHealth;
 

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { 
   ArrowLeft, 
   CreditCard, 
@@ -19,7 +19,8 @@ import { PaymentMethodSelector } from './PaymentMethodSelector';
 import { PaymentScenarioSelector } from './PaymentScenarioSelector';
 import { DEFAULT_SCENARIO } from '../../data/paymentScenarios';
 import { simulatePaymentOutcome } from '../../services/paymentOutcomeEngine';
-import { createPaymentResultEvent } from '../../services/paymentResultEvents.js';
+import { createPaymentResultEvent, createPaymentFailedEvent } from '../../services/paymentResultEvents.js';
+import { createBackendRecoveryEvent } from '../../services/api.js';
 import { createRevenueRiskContext } from '../../services/revenueRisk.js';
 import { calculateRecoveryPriority } from '../../services/recoveryPriority.js';
 import { getDemoCustomerRecoverySignals } from '../../data/demoCustomerHistory.js';
@@ -47,11 +48,18 @@ const INITIAL_FORM_DATA = {
 
 export function PaymentAmountCard({ product: propProduct, onContinue, onBack }) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const navState = location.state || {};
+
   const { user } = useAuth();
-  const { selectedProduct, setActiveRecoverySession, appendRecoveryEvent, appendAuditLog } = useRecovery();
+  const { selectedProduct, activeMerchantId, activeRecoverySession, setActiveRecoverySession, appendRecoveryEvent, appendAuditLog } = useRecovery();
   
   const activeProduct = propProduct || selectedProduct || DEMO_PRODUCT;
   const product = activeProduct;
+  const targetMerchantId = product.merchantId || activeMerchantId || DEFAULT_DEMO_MERCHANT_ID;
+  const targetProductId = product.productId || product.id;
+  const targetProductName = product.name;
+  const targetPrice = typeof product?.price === 'number' ? product.price : (Number(product?.price) || 0);
   
   // Page state: 'IDLE' | 'PROCESSING' | 'WAITING_FOR_RESULT'
   const [paymentState, setPaymentState] = useState('IDLE');
@@ -78,10 +86,12 @@ export function PaymentAmountCard({ product: propProduct, onContinue, onBack }) 
   const [firstFailedAttempt, setFirstFailedAttempt] = useState(null);
   const [firstFailedResult, setFirstFailedResult] = useState(null);
 
-  // Retry tracking state
+  // Retry tracking state — inspect navigation state and recovery context for retry indicator
   const [retryCount, setRetryCount] = useState(0);
   const [retryOfAttemptId, setRetryOfAttemptId] = useState(null);
-  const [isRetryAttempt, setIsRetryAttempt] = useState(false);
+  const [isRetryAttemptState, setIsRetryAttemptState] = useState(() => Boolean(navState.isRetryAttempt || navState.isRetry || activeRecoverySession?.isRetry));
+
+  const isRetryAttempt = Boolean(isRetryAttemptState || navState.isRetryAttempt || navState.isRetry || activeRecoverySession?.isRetry);
 
   const handleSimulateExecution = () => {
     if (recoveryExecution) return; // Prevent duplicate simulation
@@ -115,12 +125,13 @@ export function PaymentAmountCard({ product: propProduct, onContinue, onBack }) 
   };
 
   const handleRetryNavigation = () => {
-    // Preserve original attempt ID for correlation
+    const existingActivityId = navState.activityId || activeRecoverySession?.activityId || (lastAttemptEvent?.id ? `act_${lastAttemptEvent.id}` : null);
+
     if (lastAttemptEvent?.id) {
       setRetryOfAttemptId(lastAttemptEvent.id);
     }
     setRetryCount(prev => prev + 1);
-    setIsRetryAttempt(true);
+    setIsRetryAttemptState(true);
     setSelectedScenario('SUCCESS'); // Primary demo default for retries
 
     // Reset result state to IDLE form without auto-submitting payment
@@ -137,6 +148,20 @@ export function PaymentAmountCard({ product: propProduct, onContinue, onBack }) 
     setRecoveryExecution(null);
     setCustomerNotification(null);
     setRecoveryOutcome(null);
+
+    if (setActiveRecoverySession) {
+      setActiveRecoverySession(prev => ({
+        ...(prev || {}),
+        isRetry: true,
+        activityId: existingActivityId || prev?.activityId,
+        merchantId: navState.merchantId || prev?.merchantId || targetMerchantId,
+        productId: navState.productId || prev?.productId || targetProductId,
+        productName: navState.productName || prev?.productName || targetProductName,
+        amount: navState.amount || prev?.amount || targetPrice,
+        failureCode: navState.failureCode || prev?.failureCode || 'SERVER_ERROR',
+        currentStatus: 'FAILED'
+      }));
+    }
   };
 
   const handleBack = () => {
@@ -215,357 +240,405 @@ export function PaymentAmountCard({ product: propProduct, onContinue, onBack }) 
     setCustomerNotification(null);
     setRecoveryOutcome(null);
 
+    const isRetry = isRetryAttempt;
+
     // If starting a completely fresh payment attempt (not a retry), reset failure context and active session
-    if (!isRetryAttempt) {
+    if (!isRetry) {
       setFirstFailedAttempt(null);
       setFirstFailedResult(null);
       console.log('[PaymentAmountCard] setActiveRecoverySession SOURCE: handlePayAttempt (new non-retry attempt reset -> NULL)');
-      setActiveRecoverySession(null);
+      if (setActiveRecoverySession) {
+        setActiveRecoverySession(null);
+      }
     }
 
     // 2. Transition state to PROCESSING
     setPaymentState('PROCESSING');
 
-    // 3. Create PAYMENT_ATTEMPTED event with safe metadata ONLY
-    const attemptEvent = createPaymentAttempt({
-      customerId: user?.id || user?.email || 'customer_demo',
-      merchantId: product.merchantId || DEFAULT_DEMO_MERCHANT_ID,
-      productId: product.productId || product.id || 'prod_ai_fullstack_001',
-      productName: product.name || 'AI & Full-Stack Development Program',
-      amount: product.price || 2000,
-      currency: product.currency || 'INR',
-      paymentMethod: selectedMethod,
-      retryCount: isRetryAttempt ? retryCount : 0,
-      retryOfAttemptId: isRetryAttempt ? retryOfAttemptId : null
-    });
-
-    setLastAttemptEvent(attemptEvent);
-
-    // 4. Simulate short processing delay (1200ms) for realistic loading feedback
-    await new Promise(resolve => setTimeout(resolve, 1200));
-
-    // 5. Evaluate deterministic payment outcome using outcome engine
-    const outcome = simulatePaymentOutcome(selectedScenario);
-    setPaymentOutcome(outcome);
-
-    // 6. Generate structured result event (PAYMENT_SUCCESS or PAYMENT_FAILED)
-    const resultEvent = createPaymentResultEvent({
-      outcome,
-      attemptEvent,
-      customerId: user?.id || user?.email || 'customer_demo',
-      merchantId: product.merchantId || DEFAULT_DEMO_MERCHANT_ID,
-      productId: product.productId || product.id || 'prod_ai_fullstack_001',
-      productName: product.name || 'AI & Full-Stack Development Program',
-      amount: product.price || 2000,
-      currency: product.currency || 'INR',
-      paymentMethod: selectedMethod
-    });
-    setPaymentResultEvent(resultEvent);
-
-    const activeCustomerId = user?.id || user?.email || resultEvent.customerId;
-
-    // 7. Generate Revenue Risk, Signals, Priority, Assessment, Decision, Plan, Outreach Message & Notification if PAYMENT_FAILED
-    if (resultEvent.type === 'PAYMENT_FAILED') {
-      // Store first failure context for retry correlation if not already set
-      let currentFirstAttempt = firstFailedAttempt;
-      let currentFirstResult = firstFailedResult;
-      if (!currentFirstAttempt) {
-        currentFirstAttempt = attemptEvent;
-        currentFirstResult = resultEvent;
-        setFirstFailedAttempt(attemptEvent);
-        setFirstFailedResult(resultEvent);
-      }
-
-      const riskContext = createRevenueRiskContext(resultEvent);
-      setRevenueRiskContext(riskContext);
-      
-      const signals = getDemoCustomerRecoverySignals(activeCustomerId);
-      setCustomerRecoverySignals(signals);
-
-      const priority = calculateRecoveryPriority(riskContext);
-      setRecoveryPriority(priority);
-
-      const assessment = createRecoveryAssessment(riskContext, priority, signals);
-      setRecoveryAssessment(assessment);
-
-      const decision = decideRecoveryAction(assessment);
-      setRecoveryDecision(decision);
-
-      const plan = planRecoveryAction(decision, assessment);
-      setRecoveryActionPlan(plan);
-
-      const outreachMsg = generateRecoveryOutreachMessage(assessment, decision, plan, user);
-      setRecoveryOutreachMessage(outreachMsg);
-      setRecoveryExecution(null);
-
-      const notif = createCustomerRecoveryNotification(assessment, decision, plan, outreachMsg);
-      setCustomerNotification(notif);
-      setRecoveryOutcome(null);
-
-      // Publish Runtime Session & Events to Shared Recovery Context
-      const activeSession = {
-        customerId: activeCustomerId,
-        merchantId: product.merchantId || DEFAULT_DEMO_MERCHANT_ID,
-        productId: product.productId || product.id || 'prod_ai_fullstack_001',
-        productName: product.name || 'AI & Full-Stack Development Program',
-        amount: product.price || 2000,
+    try {
+      // 3. Create PAYMENT_ATTEMPTED event with safe metadata ONLY
+      const attemptEvent = createPaymentAttempt({
+        customerId: user?.id || user?.email || 'customer_demo',
+        merchantId: targetMerchantId,
+        productId: targetProductId,
+        productName: targetProductName,
+        amount: targetPrice,
         currency: product.currency || 'INR',
         paymentMethod: selectedMethod,
-        failureCode: resultEvent.failureCode || 'SERVER_ERROR',
-        currentStatus: 'FAILED',
+        retryCount: isRetry ? (retryCount || 1) : 0,
+        retryOfAttemptId: isRetry ? (retryOfAttemptId || activeRecoverySession?.attemptEvent?.id) : null
+      });
+
+      setLastAttemptEvent(attemptEvent);
+
+      // 4. Simulate short processing delay (1200ms) for realistic loading feedback
+      await new Promise(resolve => setTimeout(resolve, 1200));
+
+      // 5. Evaluate deterministic payment outcome:
+      // Initial attempt (isRetry === false) -> SERVER_ERROR
+      // Retry attempt (isRetry === true) -> SUCCESS
+      const effectiveScenario = isRetry ? 'SUCCESS' : 'SERVER_ERROR';
+      const outcome = simulatePaymentOutcome(effectiveScenario);
+      setPaymentOutcome(outcome);
+
+      // 6. Generate structured result event (PAYMENT_SUCCESS or PAYMENT_FAILED)
+      const resultEvent = createPaymentResultEvent({
+        outcome,
         attemptEvent,
-        resultEvent,
-        revenueRiskContext: riskContext,
-        customerSignals: signals,
-        recoveryPriority: priority,
-        recoveryAssessment: assessment,
-        recoveryDecision: decision,
-        recoveryActionPlan: plan,
-        outreachMessage: outreachMsg,
-        recoveryNotification: notif,
-        recoveryExecution: null,
-        retryAttempt: isRetryAttempt ? attemptEvent : null,
-        recoveryOutcome: null
-      };
-      setActiveRecoverySession(activeSession);
-
-      const runtimeActivityRecord = {
-        activityId: `act_${resultEvent.id}`,
-        customerId: activeCustomerId,
-        merchantId: product.merchantId || DEFAULT_DEMO_MERCHANT_ID,
-        productId: product.productId || product.id || 'prod_ai_fullstack_001',
-        productName: product.name || 'AI & Full-Stack Development Program',
-        failureCode: resultEvent.failureCode || 'SERVER_ERROR',
-        failureReason: assessment?.assessment?.failureSummary || 'Payment processing error',
-        priority: priority?.priority || 'CRITICAL',
-        priorityScore: priority?.score || 85,
-        recommendedAction: decision?.recommendedAction || 'RECOVERY_OUTREACH',
-        channel: plan?.channel || 'EMAIL',
-        status: 'PENDING',
-        amount: product.price || 2000,
-        recoveredAmount: 0,
+        customerId: user?.id || user?.email || 'customer_demo',
+        merchantId: targetMerchantId,
+        productId: targetProductId,
+        productName: targetProductName,
+        amount: targetPrice,
         currency: product.currency || 'INR',
-        retryCount: isRetryAttempt ? retryCount : 1,
-        timestamp: resultEvent.timestamp
-      };
-      appendRecoveryEvent(runtimeActivityRecord);
+        paymentMethod: selectedMethod
+      });
+      setPaymentResultEvent(resultEvent);
 
-      // Append Runtime Audit Logs
-      appendAuditLog({
-        auditId: `aud_fail_${resultEvent.id}`,
-        eventType: 'PAYMENT_FAILED',
-        source: 'CUSTOMER_PORTAL',
-        actor: `Customer (${activeCustomerId})`,
-        status: 'FAILED',
-        timestamp: resultEvent.timestamp,
-        isSimulated: true,
-        metadata: {
-          customerId: activeCustomerId,
-          productId: product.id || 'ai-fullstack-program',
-          paymentAttemptId: attemptEvent.id,
-          amount: product.price || 2000,
-          currency: product.currency || 'INR',
-          failureCode: resultEvent.failureCode,
-          details: `Simulated payment attempt failed with ${resultEvent.failureCode}.`
+      const activeCustomerId = user?.id || user?.email || resultEvent.customerId;
+
+      // 7. Generate Revenue Risk, Signals, Priority, Assessment, Decision, Plan, Outreach Message & Notification if PAYMENT_FAILED
+      if (resultEvent.type === 'PAYMENT_FAILED') {
+        let currentFirstAttempt = firstFailedAttempt;
+        let currentFirstResult = firstFailedResult;
+        if (!currentFirstAttempt) {
+          currentFirstAttempt = attemptEvent;
+          currentFirstResult = resultEvent;
+          setFirstFailedAttempt(attemptEvent);
+          setFirstFailedResult(resultEvent);
         }
-      });
 
-      if (decision) {
-        appendAuditLog({
-          auditId: `aud_dec_${decision.decisionId}`,
-          eventType: 'RECOVERY_DECISION',
-          source: 'AGENT_CONSOLE',
-          actor: 'Autonomous AI Agent',
-          status: 'COMPLETED',
-          timestamp: decision.timestamp,
-          isSimulated: true,
-          metadata: {
-            customerId: activeCustomerId,
-            productId: product.id || 'ai-fullstack-program',
-            paymentAttemptId: attemptEvent.id,
-            amount: product.price || 2000,
-            currency: product.currency || 'INR',
-            failureCode: resultEvent.failureCode,
-            evaluatedPriority: priority?.priority || 'CRITICAL',
-            evaluatedScore: priority?.score || 85,
-            decisionAction: decision.recommendedAction,
-            details: decision.reason
-          }
-        });
-      }
+        const riskContext = createRevenueRiskContext(resultEvent);
+        setRevenueRiskContext(riskContext);
+        
+        const signals = getDemoCustomerRecoverySignals(activeCustomerId);
+        setCustomerRecoverySignals(signals);
 
-      if (plan) {
-        appendAuditLog({
-          auditId: `aud_plan_${plan.actionPlanId}`,
-          eventType: 'RECOVERY_ACTION_PLAN',
-          source: 'AGENT_CONSOLE',
-          actor: 'Autonomous AI Agent',
-          status: 'COMPLETED',
-          timestamp: plan.timestamp,
-          isSimulated: true,
-          metadata: {
-            customerId: activeCustomerId,
-            productId: product.id || 'ai-fullstack-program',
-            channel: plan.channel,
-            actionType: plan.actionType,
-            draftMessage: outreachMsg?.subject || 'Action Required: Complete your purchase',
-            details: plan.reason
-          }
-        });
-      }
-    } else {
-      // PAYMENT_SUCCESS
-      setRevenueRiskContext(null);
-      setCustomerRecoverySignals(null);
-      setRecoveryPriority(null);
-      setRecoveryAssessment(null);
-      setRecoveryDecision(null);
-      setRecoveryActionPlan(null);
-      setRecoveryOutreachMessage(null);
-      setRecoveryExecution(null);
-      setCustomerNotification(null);
+        const priority = calculateRecoveryPriority(riskContext);
+        setRecoveryPriority(priority);
 
-      // Evaluate recovery outcome if this is a successful retry
-      const origAttempt = firstFailedAttempt || (isRetryAttempt && lastAttemptEvent ? lastAttemptEvent : null);
-      const origResult = firstFailedResult;
-      
-      let recoveryOutcomeObj = null;
-      if (isRetryAttempt && origAttempt && origResult) {
-        recoveryOutcomeObj = createRecoveryOutcome(origAttempt, origResult, attemptEvent, resultEvent);
-        setRecoveryOutcome(recoveryOutcomeObj);
-      } else {
+        const assessment = createRecoveryAssessment(riskContext, priority, signals);
+        setRecoveryAssessment(assessment);
+
+        const decision = decideRecoveryAction(assessment);
+        setRecoveryDecision(decision);
+
+        const plan = planRecoveryAction(decision, assessment);
+        setRecoveryActionPlan(plan);
+
+        const outreachMsg = generateRecoveryOutreachMessage(assessment, decision, plan, user);
+        setRecoveryOutreachMessage(outreachMsg);
+        setRecoveryExecution(null);
+
+        const notif = createCustomerRecoveryNotification(assessment, decision, plan, outreachMsg);
+        setCustomerNotification(notif);
         setRecoveryOutcome(null);
-      }
 
-      console.log('[PaymentAmountCard] PAYMENT_SUCCESS', {
-        customerId: activeCustomerId,
-        amount: product.price || 2000,
-        isRetryAttempt,
-        hasOrigAttempt: Boolean(origAttempt),
-        hasOrigResult: Boolean(origResult)
-      });
+        const activityId = navState.activityId || activeRecoverySession?.activityId || `act_${resultEvent.id}`;
 
-      if (isRetryAttempt && origAttempt && origResult && recoveryOutcomeObj) {
-        console.log('[PaymentAmountCard] RECOVERY_OUTCOME', {
-          recoveryStatus: recoveryOutcomeObj.recoveryStatus,
-          recoveredRevenue: recoveryOutcomeObj.recoveredRevenue,
-          timestamp: recoveryOutcomeObj.timestamp
-        });
-
-        // Successful Retry Flow — Ensure activeRecoverySession is NEVER set to null
-        setActiveRecoverySession(prev => {
-          const baseSession = prev || {
-            customerId: activeCustomerId,
-            merchantId: origAttempt.merchantId || product.merchantId || DEFAULT_DEMO_MERCHANT_ID,
-            productId: origAttempt.productId || product.productId || product.id || 'prod_ai_fullstack_001',
-            productName: origAttempt.productName || product.name || 'AI & Full-Stack Development Program',
-            amount: origAttempt.amount || product.price || 2000,
-            currency: product.currency || 'INR',
-            paymentMethod: selectedMethod,
-            failureCode: origResult.failureCode || 'SERVER_ERROR',
-            attemptEvent: origAttempt,
-            resultEvent: origResult
-          };
-
-          return {
-            ...baseSession,
-            retryAttempt: attemptEvent,
-            retryResult: resultEvent,
-            recoveryOutcome: recoveryOutcomeObj,
-            currentStatus: 'RECOVERED'
-          };
-        });
-
-        const runtimeRecoveredRecord = {
-          activityId: `act_${origResult.id}`,
-          customerId: origAttempt.customerId || activeCustomerId,
-          merchantId: origAttempt.merchantId || product.merchantId || DEFAULT_DEMO_MERCHANT_ID,
-          productId: origAttempt.productId || product.productId || product.id || 'prod_ai_fullstack_001',
-          productName: origAttempt.productName || product.name || 'AI & Full-Stack Development Program',
-          failureCode: origResult.failureCode || 'SERVER_ERROR',
-          failureReason: 'Recovered via customer payment retry',
-          priority: 'CRITICAL',
-          priorityScore: 85,
-          recommendedAction: 'RECOVERED',
-          channel: 'EMAIL',
-          status: 'RECOVERED',
-          amount: origAttempt.amount || 2000,
-          recoveredAmount: recoveryOutcomeObj.recoveredRevenue || 2000,
-          currency: recoveryOutcomeObj.currency || 'INR',
-          retryCount: retryCount || 1,
-          timestamp: recoveryOutcomeObj.timestamp
+        // Publish Runtime Session & Events to Shared Recovery Context
+        const activeSession = {
+          activityId: activityId,
+          customerId: activeCustomerId,
+          merchantId: targetMerchantId,
+          productId: targetProductId,
+          productName: targetProductName,
+          amount: targetPrice,
+          currency: product.currency || 'INR',
+          paymentMethod: selectedMethod,
+          failureCode: resultEvent.failureCode || 'SERVER_ERROR',
+          currentStatus: 'FAILED',
+          isRetry: false,
+          attemptEvent,
+          resultEvent,
+          revenueRiskContext: riskContext,
+          customerSignals: signals,
+          recoveryPriority: priority,
+          recoveryAssessment: assessment,
+          recoveryDecision: decision,
+          recoveryActionPlan: plan,
+          outreachMessage: outreachMsg,
+          recoveryNotification: notif,
+          recoveryExecution: null,
+          retryAttempt: null,
+          recoveryOutcome: null
         };
-        appendRecoveryEvent(runtimeRecoveredRecord);
+        setActiveRecoverySession(activeSession);
 
-        appendAuditLog({
-          auditId: `aud_retry_${attemptEvent.id}`,
-          eventType: 'CUSTOMER_RETRY',
-          source: 'CUSTOMER_PORTAL',
-          actor: `Customer (${origAttempt.customerId || activeCustomerId})`,
-          status: 'COMPLETED',
-          timestamp: attemptEvent.timestamp,
-          isSimulated: true,
-          metadata: {
-            customerId: origAttempt.customerId || activeCustomerId,
-            productId: origAttempt.productId || 'ai-fullstack-program',
-            paymentAttemptId: attemptEvent.id,
-            retryStatus: 'PAYMENT_SUCCESS',
-            details: 'Customer completed payment retry attempt successfully.'
-          }
-        });
+        const runtimeActivityRecord = {
+          activityId: activityId,
+          customerId: activeCustomerId,
+          merchantId: targetMerchantId,
+          productId: targetProductId,
+          productName: targetProductName,
+          failureCode: resultEvent.failureCode || 'SERVER_ERROR',
+          failureReason: assessment?.assessment?.failureSummary || 'Payment processing error',
+          priority: priority?.priority || 'CRITICAL',
+          priorityScore: priority?.score || 85,
+          recommendedAction: decision?.recommendedAction || 'RECOVERY_OUTREACH',
+          channel: plan?.channel || 'EMAIL',
+          status: 'FAILED',
+          amount: targetPrice,
+          recoveredAmount: 0,
+          currency: product.currency || 'INR',
+          retryCount: 0,
+          paymentAttemptId: attemptEvent.id,
+          paymentResultId: resultEvent.id,
+          timestamp: resultEvent.timestamp
+        };
 
-        appendAuditLog({
-          auditId: `aud_outcome_${recoveryOutcomeObj.recoveryId}`,
-          eventType: 'RECOVERY_OUTCOME',
-          source: 'RULE_ENGINE',
-          actor: 'RecoverAI System',
-          status: 'COMPLETED',
-          timestamp: recoveryOutcomeObj.timestamp,
-          isSimulated: true,
-          metadata: {
-            recoveryOutcome: 'RECOVERED',
-            recoveredAmount: recoveryOutcomeObj.recoveredRevenue,
-            currency: recoveryOutcomeObj.currency,
-            customerId: recoveryOutcomeObj.customerId,
-            details: `Payment recovery completed. ₹${recoveryOutcomeObj.recoveredRevenue} INR net revenue recovered.`
+        // Persist recovery event authoritatively to backend database
+        await createBackendRecoveryEvent(runtimeActivityRecord);
+
+        appendRecoveryEvent(runtimeActivityRecord);
+
+        // Append Runtime Audit Logs
+        try {
+          appendAuditLog({
+            auditId: `aud_fail_${resultEvent.id}`,
+            eventType: 'PAYMENT_FAILED',
+            source: 'CUSTOMER_PORTAL',
+            actor: `Customer (${activeCustomerId})`,
+            status: 'FAILED',
+            timestamp: resultEvent.timestamp,
+            isSimulated: true,
+            metadata: {
+              customerId: activeCustomerId,
+              productId: targetProductId,
+              paymentAttemptId: attemptEvent.id,
+              amount: targetPrice,
+              currency: product.currency || 'INR',
+              failureCode: resultEvent.failureCode,
+              details: `Simulated payment attempt failed with ${resultEvent.failureCode}.`
+            }
+          });
+        } catch (audErr) {
+          console.error('[PaymentAmountCard] Audit log error:', audErr);
+        }
+
+        if (decision) {
+          try {
+            appendAuditLog({
+              auditId: `aud_dec_${decision.decisionId}`,
+              eventType: 'RECOVERY_DECISION',
+              source: 'AGENT_CONSOLE',
+              actor: 'Autonomous AI Agent',
+              status: 'COMPLETED',
+              timestamp: decision.timestamp,
+              isSimulated: true,
+              metadata: {
+                customerId: activeCustomerId,
+                productId: targetProductId,
+                paymentAttemptId: attemptEvent.id,
+                amount: targetPrice,
+                currency: product.currency || 'INR',
+                failureCode: resultEvent.failureCode,
+                evaluatedPriority: priority?.priority || 'CRITICAL',
+                evaluatedScore: priority?.score || 85,
+                decisionAction: decision.recommendedAction,
+                details: decision.reason
+              }
+            });
+          } catch (audErr) {
+            console.error('[PaymentAmountCard] Decision audit log error:', audErr);
           }
-        });
+        }
+
+        if (plan) {
+          try {
+            appendAuditLog({
+              auditId: `aud_plan_${plan.actionPlanId}`,
+              eventType: 'RECOVERY_ACTION_PLAN',
+              source: 'AGENT_CONSOLE',
+              actor: 'Autonomous AI Agent',
+              status: 'COMPLETED',
+              timestamp: plan.timestamp,
+              isSimulated: true,
+              metadata: {
+                customerId: activeCustomerId,
+                productId: targetProductId,
+                channel: plan.channel,
+                actionType: plan.actionType,
+                draftMessage: outreachMsg?.subject || 'Action Required: Complete your purchase',
+                details: plan.reason
+              }
+            });
+          } catch (audErr) {
+            console.error('[PaymentAmountCard] Plan audit log error:', audErr);
+          }
+        }
       } else {
-        // Initial Payment Success Flow (No recovery opportunity needed)
-        setActiveRecoverySession(null);
+        // PAYMENT_SUCCESS (Successful Retry Attempt)
+        setRevenueRiskContext(null);
+        setCustomerRecoverySignals(null);
+        setRecoveryPriority(null);
+        setRecoveryAssessment(null);
+        setRecoveryDecision(null);
+        setRecoveryActionPlan(null);
+        setRecoveryOutreachMessage(null);
+        setRecoveryExecution(null);
+        setCustomerNotification(null);
 
-        appendAuditLog({
-          auditId: `aud_success_${resultEvent.id}`,
-          eventType: 'PAYMENT_SUCCESS',
-          source: 'CUSTOMER_PORTAL',
-          actor: `Customer (${activeCustomerId})`,
-          status: 'SUCCESS',
-          timestamp: resultEvent.timestamp,
-          isSimulated: true,
-          metadata: {
-            customerId: activeCustomerId,
-            productId: product.id || 'ai-fullstack-program',
-            paymentAttemptId: attemptEvent.id,
-            amount: product.price || 2000,
+        const targetActivityId = navState.activityId || activeRecoverySession?.activityId || (firstFailedResult ? `act_${firstFailedResult.id}` : `act_${lastAttemptEvent?.id || resultEvent.id}`);
+        const preservedMerchantId = navState.merchantId || activeRecoverySession?.merchantId || targetMerchantId;
+        const preservedProductId = navState.productId || activeRecoverySession?.productId || targetProductId;
+        const preservedProductName = navState.productName || activeRecoverySession?.productName || targetProductName;
+        const preservedAmount = navState.amount || activeRecoverySession?.amount || targetPrice;
+
+        const origAttempt = firstFailedAttempt || (lastAttemptEvent ? lastAttemptEvent : { id: attemptEvent.id, customerId: activeCustomerId, merchantId: preservedMerchantId, productId: preservedProductId, productName: preservedProductName, amount: preservedAmount });
+        const origResult = firstFailedResult || { id: attemptEvent.id, failureCode: 'SERVER_ERROR' };
+        
+        let recoveryOutcomeObj = null;
+        if (isRetry) {
+          recoveryOutcomeObj = createRecoveryOutcome(origAttempt, origResult, attemptEvent, resultEvent) || {
+            recoveryId: `rec_out_${resultEvent.id}`,
+            recoveryStatus: 'RECOVERED',
+            recoveredRevenue: preservedAmount,
             currency: product.currency || 'INR',
-            details: 'Initial payment attempt completed successfully.'
+            originalPaymentAttemptId: origAttempt.id || attemptEvent.id,
+            retryCount: retryCount || 1,
+            source: 'CUSTOMER_RETRY',
+            timestamp: new Date().toISOString()
+          };
+          setRecoveryOutcome(recoveryOutcomeObj);
+        } else {
+          setRecoveryOutcome(null);
+        }
+
+        if (isRetry) {
+          setActiveRecoverySession(prev => {
+            const baseSession = prev || {
+              customerId: activeCustomerId,
+              merchantId: preservedMerchantId,
+              productId: preservedProductId,
+              productName: preservedProductName,
+              amount: preservedAmount,
+              currency: product.currency || 'INR',
+              paymentMethod: selectedMethod,
+              failureCode: 'SERVER_ERROR',
+              attemptEvent: origAttempt,
+              resultEvent: origResult
+            };
+
+            return {
+              ...baseSession,
+              activityId: targetActivityId,
+              merchantId: preservedMerchantId,
+              productId: preservedProductId,
+              productName: preservedProductName,
+              amount: preservedAmount,
+              retryAttempt: attemptEvent,
+              retryResult: resultEvent,
+              recoveryOutcome: recoveryOutcomeObj,
+              recommendedAction: 'RECOVERED',
+              currentStatus: 'RECOVERED',
+              isRetry: true
+            };
+          });
+
+          const runtimeRecoveredRecord = {
+            activityId: targetActivityId,
+            customerId: origAttempt.customerId || activeCustomerId,
+            merchantId: preservedMerchantId,
+            productId: preservedProductId,
+            productName: preservedProductName,
+            failureCode: origResult.failureCode || 'SERVER_ERROR',
+            failureReason: 'Recovered via customer payment retry',
+            priority: 'CRITICAL',
+            priorityScore: 85,
+            recommendedAction: 'RECOVERED',
+            channel: 'EMAIL',
+            status: 'RECOVERED',
+            amount: preservedAmount,
+            recoveredAmount: preservedAmount,
+            currency: product.currency || 'INR',
+            retryCount: (activeRecoverySession?.retryCount || retryCount || 0) + 1,
+            paymentAttemptId: origAttempt.id || attemptEvent.id,
+            paymentResultId: resultEvent.id,
+            timestamp: new Date().toISOString()
+          };
+
+          // Persist status update authoritatively to backend database
+          await createBackendRecoveryEvent(runtimeRecoveredRecord);
+
+          appendRecoveryEvent(runtimeRecoveredRecord);
+
+          try {
+            appendAuditLog({
+              auditId: `aud_retry_${attemptEvent.id}`,
+              eventType: 'CUSTOMER_RETRY',
+              source: 'CUSTOMER_PORTAL',
+              actor: `Customer (${origAttempt.customerId || activeCustomerId})`,
+              status: 'COMPLETED',
+              timestamp: attemptEvent.timestamp,
+              isSimulated: true,
+              metadata: {
+                customerId: origAttempt.customerId || activeCustomerId,
+                productId: origAttempt.productId || preservedProductId,
+                paymentAttemptId: attemptEvent.id,
+                retryStatus: 'PAYMENT_SUCCESS',
+                details: 'Customer completed payment retry attempt successfully.'
+              }
+            });
+          } catch (audErr) {
+            console.error('[PaymentAmountCard] Retry audit log error:', audErr);
           }
-        });
+
+          if (recoveryOutcomeObj) {
+            appendAuditLog({
+              auditId: `aud_outcome_${recoveryOutcomeObj.recoveryId}`,
+              eventType: 'RECOVERY_OUTCOME',
+              source: 'RULE_ENGINE',
+              actor: 'RecoverAI System',
+              status: 'COMPLETED',
+              timestamp: recoveryOutcomeObj.timestamp,
+              isSimulated: true,
+              metadata: {
+                recoveryOutcome: 'RECOVERED',
+                recoveredAmount: recoveryOutcomeObj.recoveredRevenue,
+                currency: recoveryOutcomeObj.currency,
+                customerId: recoveryOutcomeObj.customerId,
+                details: `Payment recovery completed. ₹${recoveryOutcomeObj.recoveredRevenue} INR net revenue recovered.`
+              }
+            });
+          }
+        } else {
+          // Initial Payment Success Flow (No recovery opportunity needed)
+          setActiveRecoverySession(null);
+
+          appendAuditLog({
+            auditId: `aud_success_${resultEvent.id}`,
+            eventType: 'PAYMENT_SUCCESS',
+            source: 'CUSTOMER_PORTAL',
+            actor: `Customer (${activeCustomerId})`,
+            status: 'SUCCESS',
+            timestamp: resultEvent.timestamp,
+            isSimulated: true,
+            metadata: {
+              customerId: activeCustomerId,
+              productId: product.id || 'ai-fullstack-program',
+              paymentAttemptId: attemptEvent.id,
+              amount: product.price || 2000,
+              currency: product.currency || 'INR',
+              details: 'Initial payment attempt completed successfully.'
+            }
+          });
+        }
       }
-    }
 
-    // 8. Transition state to WAITING_FOR_RESULT
-    setPaymentState('WAITING_FOR_RESULT');
-
-
-    if (onContinue) {
-      onContinue(selectedMethod, formData, attemptEvent, outcome, resultEvent);
+      if (onContinue) {
+        onContinue(selectedMethod, formData, attemptEvent, outcome, resultEvent);
+      }
+    } catch (err) {
+      console.error('[PaymentAmountCard] Error during payment processing:', err);
+    } finally {
+      setPaymentState('WAITING_FOR_RESULT');
     }
   };
 
 
 
-  const amount = Number(product?.price) || 2000;
+  const amount = targetPrice;
   const formattedAmount = new Intl.NumberFormat('en-IN', {
     style: 'currency',
     currency: product?.currency || 'INR',
@@ -799,8 +872,8 @@ export function PaymentAmountCard({ product: propProduct, onContinue, onBack }) 
 
           <PayButton
             formattedAmount={formattedAmount}
-            disabled={!selectedMethod}
-            loading={false}
+            disabled={!selectedMethod || paymentState !== 'IDLE'}
+            loading={paymentState === 'PROCESSING'}
             onClick={handlePayAttempt}
           />
 

@@ -40,9 +40,9 @@ export function createCustomerRecoveryNotification(
   }
 
   const failureCode = recoveryAssessment.failureCode || recoveryDecision.failureCode || 'SERVER_ERROR';
-  const productName = recoveryAssessment.productId === 'ai-fullstack-program'
+  const productName = recoveryAssessment.productName || (recoveryAssessment.productId === 'ai-fullstack-program'
     ? 'AI & Full-Stack Development Program'
-    : (recoveryAssessment.productId || 'Demo Course');
+    : (recoveryAssessment.productId || 'Selected Product'));
 
   let title = 'Payment needs attention';
   let reason = 'Temporary payment processing issue';

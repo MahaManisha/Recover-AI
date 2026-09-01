@@ -15,7 +15,7 @@ export function ProductCard({ product = DEMO_PRODUCT, onBuyNow }) {
     if (onBuyNow) {
       onBuyNow(product);
     } else {
-      navigate('/customer/checkout');
+      navigate('/customer/checkout', { state: { isRetryAttempt: false, isRetry: false } });
     }
   };
 

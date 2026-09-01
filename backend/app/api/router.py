@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.routes import health, auth, customer, merchant, products
+from app.api.routes import health, auth, customer, merchant, products, recovery
 
 api_router = APIRouter()
 
@@ -9,6 +9,7 @@ api_router.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 api_router.include_router(customer.router, prefix="/customer", tags=["Customer Verification"])
 api_router.include_router(merchant.router, prefix="/merchant", tags=["Merchant Management"])
 api_router.include_router(products.router, prefix="/products", tags=["Product Catalog"])
+api_router.include_router(recovery.router, prefix="/recovery", tags=["Recovery"])
 
 # Structural Placeholders for Future Milestone Routers:
 # api_router.include_router(payments.router, prefix="/payments", tags=["Payments"])
