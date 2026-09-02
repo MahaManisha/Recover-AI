@@ -6,16 +6,26 @@ import { DEMO_PRODUCT } from '../../data/demoProduct';
 
 export function ProductCard({ product = DEMO_PRODUCT, onBuyNow }) {
   const navigate = useNavigate();
-  const { setSelectedProduct } = useRecovery();
+  const { setSelectedProduct, clearRecoverySession } = useRecovery();
 
   const handleBuyNow = () => {
     if (setSelectedProduct) {
       setSelectedProduct(product);
     }
+    // Explicitly clear any stale recovery session context when starting a fresh purchase
+    if (clearRecoverySession) {
+      clearRecoverySession();
+    }
     if (onBuyNow) {
       onBuyNow(product);
     } else {
-      navigate('/customer/checkout', { state: { isRetryAttempt: false, isRetry: false } });
+      navigate('/customer/checkout', {
+        state: {
+          isRetryAttempt: false,
+          isRetry: false,
+          isFreshPurchase: true
+        }
+      });
     }
   };
 

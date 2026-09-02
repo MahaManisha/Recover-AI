@@ -86,12 +86,19 @@ export function PaymentAmountCard({ product: propProduct, onContinue, onBack }) 
   const [firstFailedAttempt, setFirstFailedAttempt] = useState(null);
   const [firstFailedResult, setFirstFailedResult] = useState(null);
 
-  // Retry tracking state — inspect navigation state and recovery context for retry indicator
+  // Retry tracking state — explicit navigation flags vs internal retry trigger
   const [retryCount, setRetryCount] = useState(0);
   const [retryOfAttemptId, setRetryOfAttemptId] = useState(null);
-  const [isRetryAttemptState, setIsRetryAttemptState] = useState(() => Boolean(navState.isRetryAttempt || navState.isRetry || activeRecoverySession?.isRetry));
+  const [isInternalRetryState, setIsInternalRetryState] = useState(false);
 
-  const isRetryAttempt = Boolean(isRetryAttemptState || navState.isRetryAttempt || navState.isRetry || activeRecoverySession?.isRetry);
+  // Explicit navigation flags from React Router location.state
+  const isExplicitNavRetry = Boolean(navState.isRetryAttempt === true || navState.isRetry === true);
+  const isExplicitNavFresh = Boolean(navState.isFreshPurchase === true && navState.isRetryAttempt !== true && navState.isRetry !== true);
+
+  // Final retry attempt flag: Must be true if internally triggered via retry button or explicitly navigated as a retry
+  const isRetryAttempt = Boolean(
+    isInternalRetryState || isExplicitNavRetry || (!isExplicitNavFresh && Boolean(navState.activityId))
+  );
 
   const handleSimulateExecution = () => {
     if (recoveryExecution) return; // Prevent duplicate simulation
@@ -126,12 +133,34 @@ export function PaymentAmountCard({ product: propProduct, onContinue, onBack }) 
 
   const handleRetryNavigation = () => {
     const existingActivityId = navState.activityId || activeRecoverySession?.activityId || (lastAttemptEvent?.id ? `act_${lastAttemptEvent.id}` : null);
+    const existingAttemptId = navState.paymentAttemptId || activeRecoverySession?.paymentAttemptId || activeRecoverySession?.attemptEvent?.id || lastAttemptEvent?.id;
+    const existingResultId = navState.paymentResultId || activeRecoverySession?.paymentResultId || activeRecoverySession?.resultEvent?.id;
+    const existingMerchantId = navState.merchantId || activeRecoverySession?.merchantId || targetMerchantId;
+    const existingCustomerId = navState.customerId || activeRecoverySession?.customerId || user?.id || user?.email || 'customer_demo';
+    const existingProductId = navState.productId || activeRecoverySession?.productId || targetProductId;
+    const existingProductName = navState.productName || activeRecoverySession?.productName || targetProductName;
+    const existingAmount = navState.amount || activeRecoverySession?.amount || targetPrice;
 
-    if (lastAttemptEvent?.id) {
-      setRetryOfAttemptId(lastAttemptEvent.id);
+    console.log('[RETRY FLOW] Retry button clicked');
+    console.log('[RETRY FLOW] Navigation state:', {
+      isRetryAttempt: true,
+      isRetry: true,
+      isFreshPurchase: false,
+      activityId: existingActivityId,
+      paymentAttemptId: existingAttemptId,
+      paymentResultId: existingResultId,
+      merchantId: existingMerchantId,
+      customerId: existingCustomerId,
+      productId: existingProductId,
+      productName: existingProductName,
+      amount: existingAmount
+    });
+
+    if (existingAttemptId) {
+      setRetryOfAttemptId(existingAttemptId);
     }
     setRetryCount(prev => prev + 1);
-    setIsRetryAttemptState(true);
+    setIsInternalRetryState(true);
     setSelectedScenario('SUCCESS'); // Primary demo default for retries
 
     // Reset result state to IDLE form without auto-submitting payment
@@ -154,10 +183,10 @@ export function PaymentAmountCard({ product: propProduct, onContinue, onBack }) 
         ...(prev || {}),
         isRetry: true,
         activityId: existingActivityId || prev?.activityId,
-        merchantId: navState.merchantId || prev?.merchantId || targetMerchantId,
-        productId: navState.productId || prev?.productId || targetProductId,
-        productName: navState.productName || prev?.productName || targetProductName,
-        amount: navState.amount || prev?.amount || targetPrice,
+        merchantId: existingMerchantId || prev?.merchantId || targetMerchantId,
+        productId: existingProductId || prev?.productId || targetProductId,
+        productName: existingProductName || prev?.productName || targetProductName,
+        amount: existingAmount || prev?.amount || targetPrice,
         failureCode: navState.failureCode || prev?.failureCode || 'SERVER_ERROR',
         currentStatus: 'FAILED'
       }));
@@ -275,9 +304,9 @@ export function PaymentAmountCard({ product: propProduct, onContinue, onBack }) 
       await new Promise(resolve => setTimeout(resolve, 1200));
 
       // 5. Evaluate deterministic payment outcome:
-      // Initial attempt (isRetry === false) -> SERVER_ERROR
-      // Retry attempt (isRetry === true) -> SUCCESS
-      const effectiveScenario = isRetry ? 'SUCCESS' : 'SERVER_ERROR';
+      // - Fresh purchase (isRetry === false): controlled by selectedScenario (SERVER_ERROR / NETWORK_ERROR / TIMEOUT / SUCCESS)
+      // - Explicit retry (isRetry === true): produces SUCCESS (RECOVERED)
+      const effectiveScenario = isRetry ? 'SUCCESS' : selectedScenario;
       const outcome = simulatePaymentOutcome(effectiveScenario);
       setPaymentOutcome(outcome);
 
@@ -334,7 +363,16 @@ export function PaymentAmountCard({ product: propProduct, onContinue, onBack }) 
         setCustomerNotification(notif);
         setRecoveryOutcome(null);
 
-        const activityId = navState.activityId || activeRecoverySession?.activityId || `act_${resultEvent.id}`;
+        const activityId = navState.activityId || activeRecoverySession?.activityId || (firstFailedAttempt ? `act_${firstFailedAttempt.id}` : `act_${attemptEvent.id}`);
+
+        console.log('[PaymentAmountCard] FAILED Payment Attempt Event:', {
+          activityId,
+          paymentAttemptId: attemptEvent.id,
+          paymentResultId: resultEvent.id,
+          merchantId: targetMerchantId,
+          productId: targetProductId,
+          status: 'FAILED'
+        });
 
         // Publish Runtime Session & Events to Shared Recovery Context
         const activeSession = {
@@ -479,11 +517,21 @@ export function PaymentAmountCard({ product: propProduct, onContinue, onBack }) 
         setRecoveryExecution(null);
         setCustomerNotification(null);
 
-        const targetActivityId = navState.activityId || activeRecoverySession?.activityId || (firstFailedResult ? `act_${firstFailedResult.id}` : `act_${lastAttemptEvent?.id || resultEvent.id}`);
+        const targetActivityId = navState.activityId || activeRecoverySession?.activityId || (firstFailedAttempt ? `act_${firstFailedAttempt.id}` : (lastAttemptEvent ? `act_${lastAttemptEvent.id}` : `act_${attemptEvent.id}`));
         const preservedMerchantId = navState.merchantId || activeRecoverySession?.merchantId || targetMerchantId;
         const preservedProductId = navState.productId || activeRecoverySession?.productId || targetProductId;
         const preservedProductName = navState.productName || activeRecoverySession?.productName || targetProductName;
         const preservedAmount = navState.amount || activeRecoverySession?.amount || targetPrice;
+
+        console.log('[PaymentAmountCard] RECOVERED Retry Attempt Event:', {
+          isRetry,
+          activityId: targetActivityId,
+          paymentAttemptId: attemptEvent.id,
+          paymentResultId: resultEvent.id,
+          merchantId: preservedMerchantId,
+          productId: preservedProductId,
+          status: 'RECOVERED'
+        });
 
         const origAttempt = firstFailedAttempt || (lastAttemptEvent ? lastAttemptEvent : { id: attemptEvent.id, customerId: activeCustomerId, merchantId: preservedMerchantId, productId: preservedProductId, productName: preservedProductName, amount: preservedAmount });
         const origResult = firstFailedResult || { id: attemptEvent.id, failureCode: 'SERVER_ERROR' };
@@ -559,7 +607,26 @@ export function PaymentAmountCard({ product: propProduct, onContinue, onBack }) 
           };
 
           // Persist status update authoritatively to backend database
-          await createBackendRecoveryEvent(runtimeRecoveredRecord);
+          console.log('[RECOVERY DEBUG] Sending RECOVERED event:', {
+              activityId: runtimeRecoveredRecord.activityId,
+              merchantId: runtimeRecoveredRecord.merchantId,
+              customerId: runtimeRecoveredRecord.customerId,
+              productId: runtimeRecoveredRecord.productId,
+              productName: runtimeRecoveredRecord.productName,
+              amount: runtimeRecoveredRecord.amount,
+              status: runtimeRecoveredRecord.status,
+              recoveredAmount: runtimeRecoveredRecord.recoveredAmount,
+              paymentAttemptId: runtimeRecoveredRecord.paymentAttemptId,
+              paymentResultId: runtimeRecoveredRecord.paymentResultId
+          });
+
+          const recoveryResponse =
+              await createBackendRecoveryEvent(runtimeRecoveredRecord);
+
+          console.log('[RECOVERY DEBUG] Backend RECOVERED response:', recoveryResponse);
+          if (recoveryResponse && recoveryResponse.success === false) {
+            console.error('[RECOVERY DEBUG] createBackendRecoveryEvent returned error response:', recoveryResponse);
+          }
 
           appendRecoveryEvent(runtimeRecoveredRecord);
 

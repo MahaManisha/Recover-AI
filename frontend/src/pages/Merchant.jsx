@@ -68,6 +68,14 @@ import { fetchBackendRecoveryEvents } from '../services/api';
  * - Pure simulation view driven by merchant services.
  * - 0 backend file calls, 0 DB writes, 0 storage writes.
  */
+function getEventTimestamp(e) {
+  if (!e) return 0;
+  const ts = e.updated_at || e.updatedAt || e.created_at || e.createdAt || e.timestamp || e.lastUpdated;
+  if (!ts) return 0;
+  const t = new Date(ts).getTime();
+  return isNaN(t) ? 0 : t;
+}
+
 export function Merchant() {
   const { user } = useAuth();
   const { activeRecoverySession, recoveryEvents, merchantProducts, addMerchantProduct, activeMerchantId, setActiveMerchantId } = useRecovery();
@@ -97,53 +105,96 @@ export function Merchant() {
   const [dbEvents, setDbEvents] = useState([]);
   const [dbLoading, setDbLoading] = useState(true);
 
-  const loadMerchantRecoveryData = React.useCallback(async () => {
+  const refreshMerchantRecoveryEvents = React.useCallback(async (showLoading = false) => {
     if (!currentMerchantId) return;
-    setDbLoading(true);
-    const result = await fetchBackendRecoveryEvents(currentMerchantId);
-    if (result.success && Array.isArray(result.data)) {
-      setDbEvents(result.data);
+    if (showLoading) setDbLoading(true);
+    try {
+      const result = await fetchBackendRecoveryEvents(currentMerchantId);
+      const events = (result && result.success && Array.isArray(result.data))
+        ? result.data
+        : (Array.isArray(result) ? result : []);
+
+      console.log('[MERCHANT DEBUG] Backend recovery events:', events);
+      setDbEvents(events);
+    } catch (error) {
+      console.error('[Merchant] Failed to refresh recovery events:', error);
+    } finally {
+      if (showLoading) setDbLoading(false);
     }
-    setDbLoading(false);
   }, [currentMerchantId]);
 
   React.useEffect(() => {
-    loadMerchantRecoveryData();
-  }, [loadMerchantRecoveryData]);
+    if (!currentMerchantId) return;
+
+    refreshMerchantRecoveryEvents(true);
+
+    const intervalId = setInterval(() => {
+      refreshMerchantRecoveryEvents(false);
+    }, 1500);
+
+    return () => clearInterval(intervalId);
+  }, [currentMerchantId, refreshMerchantRecoveryEvents]);
+
+  React.useEffect(() => {
+    if (!currentMerchantId) return;
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        refreshMerchantRecoveryEvents(false);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+    };
+  }, [currentMerchantId, refreshMerchantRecoveryEvents]);
 
   const merchantRecoveryEvents = useMemo(() => {
+    if (!Array.isArray(dbEvents) || dbEvents.length === 0) {
+      return [];
+    }
+
     const eventMap = new Map();
 
-    // 1. Add database-backed recovery events first
     (dbEvents || []).forEach((e) => {
       if (!e.merchantId || e.merchantId === currentMerchantId) {
         const key = e.activityId || e.id || e.paymentAttemptId;
-        if (key) eventMap.set(key, e);
-      }
-    });
-
-    // 2. Merge memory / context events if not already present
-    if (Array.isArray(recoveryEvents)) {
-      recoveryEvents.forEach((e) => {
-        if (!e.merchantId || e.merchantId === currentMerchantId) {
-          const key = e.activityId || e.id || e.paymentAttemptId;
-          if (key) {
-            const existing = eventMap.get(key);
-            if (!existing) {
-              eventMap.set(key, e);
-            } else if (e.status === 'RECOVERED' && existing.status !== 'RECOVERED') {
-              eventMap.set(key, { ...existing, ...e });
+        if (key) {
+          const existing = eventMap.get(key);
+          if (!existing) {
+            eventMap.set(key, { ...e });
+          } else {
+            // Canonical lifecycle rule: RECOVERED status overrides FAILED
+            if (e.status === 'RECOVERED' || existing.status === 'RECOVERED') {
+              existing.status = 'RECOVERED';
+              existing.recommendedAction = 'RECOVERED';
+              existing.recoveredAmount = Number(e.recoveredAmount || existing.recoveredAmount || e.amount || existing.amount) || 0;
+            }
+            if (getEventTimestamp(e) > getEventTimestamp(existing)) {
+              const wasRecovered = existing.status === 'RECOVERED' || e.status === 'RECOVERED';
+              Object.assign(existing, e);
+              if (wasRecovered) {
+                existing.status = 'RECOVERED';
+                existing.recommendedAction = 'RECOVERED';
+                existing.recoveredAmount = Number(e.recoveredAmount || existing.recoveredAmount || e.amount || existing.amount) || 0;
+              }
             }
           }
         }
-      });
-    }
+      }
+    });
 
-    return Array.from(eventMap.values());
-  }, [dbEvents, recoveryEvents, currentMerchantId]);
+    const canonicalEvents = Array.from(eventMap.values());
+    canonicalEvents.sort((a, b) => getEventTimestamp(b) - getEventTimestamp(a));
 
-  console.log('[Merchant] activeRecoverySession', activeRecoverySession);
-  console.log('[Merchant] hasValidActiveSession', hasValidActiveSession);
+    return canonicalEvents;
+  }, [dbEvents, currentMerchantId]);
+
+  console.log('[Merchant] merchantRecoveryEvents', merchantRecoveryEvents);
 
   const metrics = useMemo(() => {
     if (merchantRecoveryEvents.length > 0) {
@@ -249,64 +300,54 @@ export function Merchant() {
     productName: 'AI & Full-Stack Development Program'
   }), []);
 
-  // Dynamic active opportunity deriving authoritatively from database/runtime session when present
+  // Dynamic active opportunity deriving authoritatively from latest backend database event in merchantRecoveryEvents[0]
   const activeOpportunity = useMemo(() => {
-    // 1. Check if activeRecoverySession in context belongs to current merchant
-    if (hasValidActiveSession) {
-      const sess = activeRecoverySession;
-      const isRecovered = Boolean(sess.recoveryOutcome) || sess.currentStatus === 'RECOVERED';
-      const amount = typeof sess.amount === 'number' ? sess.amount : (Number(sess.amount || sess.revenueRiskContext?.revenueAtRisk || sess.recoveryAssessment?.amount || sess.attemptEvent?.amount) || 0);
-      const failureCode = sess.failureCode || sess.resultEvent?.failureCode || sess.revenueRiskContext?.failureCode || 'SERVER_ERROR';
+    const latestEvent = Array.isArray(merchantRecoveryEvents) && merchantRecoveryEvents.length > 0
+      ? merchantRecoveryEvents[0]
+      : null;
 
-      const rawAction = sess.recoveryDecision?.recommendedAction || sess.recoveryActionPlan?.actionType || sess.recommendedAction || 'RECOVERY_OUTREACH';
-      const recommendedAction = isRecovered ? 'RECOVERED' : rawAction;
-      const status = isRecovered ? 'RECOVERED' : (sess.currentStatus || 'FAILED');
+    console.log('[Merchant] Latest recovery event:', latestEvent);
 
-      return {
-        customerId: sess.customerId || sess.recoveryAssessment?.customerId || sess.resultEvent?.customerId || sess.attemptEvent?.customerId || 'customer_demo',
-        paymentAttemptId: sess.attemptEvent?.id || 'att_demo',
-        paymentResultId: sess.resultEvent?.id || 'result_demo',
-        amount: amount,
-        currency: sess.currency || sess.attemptEvent?.currency || 'INR',
-        failureCode: failureCode,
-        paymentMethod: sess.paymentMethod || sess.attemptEvent?.paymentMethod || 'CARD',
-        productId: sess.productId || sess.recoveryAssessment?.productId,
-        productName: sess.productName || sess.recoveryAssessment?.productName || 'Selected Product',
-        priority: sess.recoveryPriority?.priority || sess.recoveryAssessment?.priority || 'CRITICAL',
-        priorityScore: sess.recoveryPriority?.score || sess.recoveryAssessment?.priorityScore || 85,
-        recommendedAction: recommendedAction,
-        status: status,
-        retryCount: sess.retryAttempt?.retryCount || (isRecovered ? 1 : 0),
-        recoveryOutcome: sess.recoveryOutcome || null,
-        isRuntime: true
-      };
+    if (!latestEvent) {
+      console.log('[Merchant] Active opportunity:', null);
+      return null;
     }
 
-    // 2. Otherwise find the latest unresolved FAILED event from database recovery events
-    const latestFailed = (merchantRecoveryEvents || []).find(e => e.status === 'FAILED');
-    if (latestFailed) {
-      return {
-        customerId: latestFailed.customerId || 'customer_demo',
-        paymentAttemptId: latestFailed.paymentAttemptId || latestFailed.activityId || 'att_demo',
-        paymentResultId: latestFailed.paymentResultId || 'result_demo',
-        amount: Number(latestFailed.amount) || 0,
-        currency: latestFailed.currency || 'INR',
-        failureCode: latestFailed.failureCode || 'SERVER_ERROR',
-        paymentMethod: latestFailed.paymentMethod || 'CARD',
-        productId: latestFailed.productId,
-        productName: latestFailed.productName || 'Selected Product',
-        priority: latestFailed.priority || 'CRITICAL',
-        priorityScore: latestFailed.priorityScore || 85,
-        recommendedAction: latestFailed.recommendedAction || 'RECOVERY_OUTREACH',
-        status: 'FAILED',
-        retryCount: latestFailed.retryCount || 1,
-        recoveryOutcome: null,
-        isRuntime: true
-      };
-    }
+    const isRecovered = latestEvent.status === 'RECOVERED';
+    const evalStatus = isRecovered ? 'RECOVERED' : (latestEvent.status || 'FAILED');
+    const evalAction = isRecovered ? 'RECOVERED' : (latestEvent.recommendedAction || 'RECOVERY_OUTREACH');
+    const amt = Number(latestEvent.amount) || 0;
+    const recAmt = isRecovered ? (Number(latestEvent.recoveredAmount || latestEvent.amount) || amt) : 0;
 
-    return null;
-  }, [hasValidActiveSession, activeRecoverySession, merchantRecoveryEvents]);
+    const opp = {
+      ...latestEvent,
+      activityId: latestEvent.activityId || latestEvent.id,
+      customerId: latestEvent.customerId || 'customer_demo',
+      paymentAttemptId: latestEvent.paymentAttemptId || latestEvent.activityId || 'att_demo',
+      paymentResultId: latestEvent.paymentResultId || 'result_demo',
+      amount: amt,
+      recoveredAmount: recAmt,
+      netRevenueSaved: recAmt,
+      efficiency: isRecovered ? 100 : 0,
+      currency: latestEvent.currency || 'INR',
+      failureCode: latestEvent.failureCode || 'SERVER_ERROR',
+      paymentMethod: latestEvent.paymentMethod || 'CARD',
+      productId: latestEvent.productId,
+      productName: latestEvent.productName || 'Selected Product',
+      priority: latestEvent.priority || 'CRITICAL',
+      priorityScore: latestEvent.priorityScore || 85,
+      recommendedAction: evalAction,
+      status: evalStatus,
+      retryCount: latestEvent.retryCount || (isRecovered ? 1 : 0),
+      recoveryOutcome: isRecovered ? { recoveryStatus: 'RECOVERED', recoveredRevenue: recAmt } : null,
+      isRuntime: true
+    };
+
+    console.log('[MERCHANT DEBUG] Raw backend recovery events:', dbEvents);
+    console.log('[MERCHANT DEBUG] Canonical recovery lifecycles:', merchantRecoveryEvents);
+    console.log('[MERCHANT DEBUG] Selected active opportunity:', opp);
+    return opp;
+  }, [merchantRecoveryEvents, dbEvents]);
 
   // Fallback opportunity ONLY for policy preview / webhook simulator when no active runtime opportunity exists
   const previewOpportunity = useMemo(() => {
@@ -550,7 +591,7 @@ export function Merchant() {
         </div>
 
         {activeOpportunity ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs pt-1">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 text-xs pt-1">
             <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-800">
               <span className="text-slate-500 text-[10px] font-semibold uppercase tracking-wider block mb-0.5">Active Customer</span>
               <span className="font-mono font-bold text-cyan-300 text-xs block truncate">{activeOpportunity.customerId}</span>
@@ -570,6 +611,20 @@ export function Merchant() {
               <span className="text-slate-500 text-[10px] font-semibold uppercase tracking-wider block mb-0.5">Current Recommendation</span>
               <span className={`font-extrabold text-xs block ${activeOpportunity.status === 'RECOVERED' ? 'text-emerald-300' : 'text-indigo-300'}`}>
                 {activeOpportunity.recommendedAction}
+              </span>
+            </div>
+
+            <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-800">
+              <span className="text-slate-500 text-[10px] font-semibold uppercase tracking-wider block mb-0.5">Current Net Revenue Saved</span>
+              <span className={`font-extrabold text-xs block ${activeOpportunity.status === 'RECOVERED' ? 'text-emerald-300' : 'text-amber-300'}`}>
+                {formatCurrency(activeOpportunity.netRevenueSaved)}
+              </span>
+            </div>
+
+            <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-800">
+              <span className="text-slate-500 text-[10px] font-semibold uppercase tracking-wider block mb-0.5">Current Efficiency</span>
+              <span className={`font-extrabold text-xs block ${activeOpportunity.status === 'RECOVERED' ? 'text-emerald-300' : 'text-rose-400'}`}>
+                {activeOpportunity.efficiency}%
               </span>
             </div>
           </div>

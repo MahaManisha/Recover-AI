@@ -35,7 +35,15 @@ export function PurchaseSummary({ product: propProduct, onContinue, onBack }) {
     if (onContinue) {
       onContinue();
     } else {
-      navigate('/customer/payment', { state: location.state });
+      const isRetry = Boolean(location.state?.isRetryAttempt === true || location.state?.isRetry === true);
+      navigate('/customer/payment', {
+        state: {
+          ...location.state,
+          isRetryAttempt: isRetry,
+          isRetry: isRetry,
+          isFreshPurchase: !isRetry
+        }
+      });
     }
   };
 

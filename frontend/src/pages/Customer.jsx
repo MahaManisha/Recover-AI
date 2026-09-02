@@ -24,17 +24,26 @@ export function Customer() {
 
   const handlePortalRetry = () => {
     if (!activeRecoverySession) return;
+    const retryPayload = {
+      isRetryAttempt: true,
+      isRetry: true,
+      isFreshPurchase: false,
+      activityId: activeRecoverySession.activityId,
+      paymentAttemptId: activeRecoverySession.attemptEvent?.id || activeRecoverySession.paymentAttemptId,
+      paymentResultId: activeRecoverySession.resultEvent?.id || activeRecoverySession.paymentResultId,
+      merchantId: activeRecoverySession.merchantId,
+      customerId: activeRecoverySession.customerId || user?.id || user?.email || 'customer_demo',
+      productId: activeRecoverySession.productId,
+      productName: activeRecoverySession.productName,
+      amount: activeRecoverySession.amount,
+      failureCode: activeRecoverySession.failureCode || 'SERVER_ERROR'
+    };
+
+    console.log('[RETRY FLOW] Retry button clicked');
+    console.log('[RETRY FLOW] Navigation state:', retryPayload);
+
     navigate('/customer/payment', {
-      state: {
-        isRetryAttempt: true,
-        isRetry: true,
-        activityId: activeRecoverySession.activityId,
-        merchantId: activeRecoverySession.merchantId,
-        productId: activeRecoverySession.productId,
-        productName: activeRecoverySession.productName,
-        amount: activeRecoverySession.amount,
-        failureCode: activeRecoverySession.failureCode || 'SERVER_ERROR'
-      }
+      state: retryPayload
     });
   };
 
