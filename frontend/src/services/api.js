@@ -1,9 +1,9 @@
 /**
  * RecoverAI Centralized Frontend API Service Layer
  */
-import { ERROR_TYPES, formatErrorMessage } from '../utils/errors';
+import { ERROR_TYPES, formatErrorMessage } from '../utils/errors.js';
 
-export const VITE_API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+export const VITE_API_URL = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_URL) || 'http://localhost:8000';
 export const API_PREFIX = '/api';
 
 // Token and Session LocalStorage Keys
@@ -11,10 +11,12 @@ const TOKEN_KEY = 'recoverai_access_token';
 const USER_KEY = 'recoverai_user_profile';
 
 export function getToken() {
+  if (typeof localStorage === 'undefined') return null;
   return localStorage.getItem(TOKEN_KEY);
 }
 
 export function getStoredUser() {
+  if (typeof localStorage === 'undefined') return null;
   const userJson = localStorage.getItem(USER_KEY);
   if (!userJson) return null;
   try {
@@ -208,6 +210,25 @@ export async function createMerchantProduct(productData) {
 }
 
 /**
+ * M10.15 Proposal Authorization Call: POST /api/recovery/authorize-proposal
+ */
+export async function authorizeBackendProposal(authPayload) {
+  try {
+    const data = await request('/recovery/authorize-proposal', {
+      method: 'POST',
+      body: JSON.stringify(authPayload),
+    });
+    return { success: true, data };
+  } catch (error) {
+    console.error('[API] Failed to authorize proposal on backend:', error);
+    return {
+      success: false,
+      error: error.message || formatErrorMessage(error)
+    };
+  }
+}
+
+/**
  * Recovery Event Service Call: POST /api/recovery/events
  */
 export async function createBackendRecoveryEvent(eventData) {
@@ -263,5 +284,43 @@ export async function updateBackendRecoveryEvent(eventId, updateData) {
   }
 }
 
+/**
+ * Merchant Autonomy Config Call: GET /api/merchant/autonomy
+ */
+export async function fetchMerchantAutonomy(merchantId) {
+  try {
+    const query = merchantId ? `?merchantId=${encodeURIComponent(merchantId)}` : '';
+    const config = await request(`/merchant/autonomy${query}`);
+    return { success: true, data: config };
+  } catch (error) {
+    console.error('[API] Failed to fetch merchant autonomy config from database:', error);
+    return {
+      success: false,
+      error: error.message || formatErrorMessage(error),
+      data: { merchantId, autonomyEnabled: false } // Fail-safe default: DISABLED
+    };
+  }
+}
+
+/**
+ * Merchant Autonomy Config Call: PUT /api/merchant/autonomy
+ */
+export async function updateMerchantAutonomy(merchantId, autonomyEnabled) {
+  try {
+    const config = await request('/merchant/autonomy', {
+      method: 'PUT',
+      body: JSON.stringify({ merchantId, autonomyEnabled }),
+    });
+    return { success: true, data: config };
+  } catch (error) {
+    console.error('[API] Failed to update merchant autonomy config in database:', error);
+    return {
+      success: false,
+      error: error.message || formatErrorMessage(error)
+    };
+  }
+}
+
 export const fetchBackendHealth = checkBackendHealth;
+
 

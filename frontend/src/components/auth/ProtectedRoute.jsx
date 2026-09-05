@@ -28,15 +28,23 @@ export function ProtectedRoute({ children, requiredRole }) {
     );
   }
 
-  if (requiredRole && role !== requiredRole.toUpperCase()) {
-    // Unauthorized role -> redirect to user's default role area
-    if (role === 'CUSTOMER') {
-      return <Navigate to="/customer" replace />;
+  if (requiredRole) {
+    const reqRole = requiredRole.toUpperCase();
+    const isAllowed = 
+      role === reqRole || 
+      (role === 'ADMIN' && (reqRole === 'MERCHANT' || reqRole === 'AGENT')) ||
+      (role === 'MERCHANT' && reqRole === 'AGENT');
+
+    if (!isAllowed) {
+      // Unauthorized role -> redirect to user's default role area
+      if (role === 'CUSTOMER') {
+        return <Navigate to="/customer" replace />;
+      }
+      if (role === 'MERCHANT' || role === 'ADMIN') {
+        return <Navigate to="/merchant" replace />;
+      }
+      return <Navigate to="/" replace />;
     }
-    if (role === 'MERCHANT') {
-      return <Navigate to="/merchant" replace />;
-    }
-    return <Navigate to="/" replace />;
   }
 
   return children;

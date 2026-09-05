@@ -300,54 +300,47 @@ export function Merchant() {
     productName: 'AI & Full-Stack Development Program'
   }), []);
 
-  // Dynamic active opportunity deriving authoritatively from latest backend database event in merchantRecoveryEvents[0]
+  // Dynamic active opportunity deriving authoritatively from latest active FAILED backend recovery event
   const activeOpportunity = useMemo(() => {
-    const latestEvent = Array.isArray(merchantRecoveryEvents) && merchantRecoveryEvents.length > 0
-      ? merchantRecoveryEvents[0]
-      : null;
-
-    console.log('[Merchant] Latest recovery event:', latestEvent);
-
-    if (!latestEvent) {
-      console.log('[Merchant] Active opportunity:', null);
+    if (!Array.isArray(merchantRecoveryEvents) || merchantRecoveryEvents.length === 0) {
       return null;
     }
 
-    const isRecovered = latestEvent.status === 'RECOVERED';
-    const evalStatus = isRecovered ? 'RECOVERED' : (latestEvent.status || 'FAILED');
-    const evalAction = isRecovered ? 'RECOVERED' : (latestEvent.recommendedAction || 'RECOVERY_OUTREACH');
-    const amt = Number(latestEvent.amount) || 0;
-    const recAmt = isRecovered ? (Number(latestEvent.recoveredAmount || latestEvent.amount) || amt) : 0;
+    // Filter to find the latest active FAILED recovery event
+    const activeEvent = merchantRecoveryEvents.find(e => e.status === 'FAILED');
 
-    const opp = {
-      ...latestEvent,
-      activityId: latestEvent.activityId || latestEvent.id,
-      customerId: latestEvent.customerId || 'customer_demo',
-      paymentAttemptId: latestEvent.paymentAttemptId || latestEvent.activityId || 'att_demo',
-      paymentResultId: latestEvent.paymentResultId || 'result_demo',
+    if (!activeEvent) {
+      return null;
+    }
+
+    const amt = Number(activeEvent.amount) || 0;
+    const rawAction = activeEvent.recommendedAction || 'RETRY_PAYMENT';
+    const evalAction = (rawAction === 'RECOVERY_OUTREACH' || rawAction === 'RETRY_PAYMENT') ? 'Retry Payment' : rawAction;
+
+    return {
+      ...activeEvent,
+      activityId: activeEvent.activityId || activeEvent.id,
+      customerId: activeEvent.customerId || 'customer_demo',
+      paymentAttemptId: activeEvent.paymentAttemptId || activeEvent.activityId || 'att_demo',
+      paymentResultId: activeEvent.paymentResultId || 'result_demo',
       amount: amt,
-      recoveredAmount: recAmt,
-      netRevenueSaved: recAmt,
-      efficiency: isRecovered ? 100 : 0,
-      currency: latestEvent.currency || 'INR',
-      failureCode: latestEvent.failureCode || 'SERVER_ERROR',
-      paymentMethod: latestEvent.paymentMethod || 'CARD',
-      productId: latestEvent.productId,
-      productName: latestEvent.productName || 'Selected Product',
-      priority: latestEvent.priority || 'CRITICAL',
-      priorityScore: latestEvent.priorityScore || 85,
+      recoveredAmount: 0,
+      netRevenueSaved: 0,
+      efficiency: 0,
+      currency: activeEvent.currency || 'INR',
+      failureCode: activeEvent.failureCode || 'SERVER_ERROR',
+      paymentMethod: activeEvent.paymentMethod || 'CARD',
+      productId: activeEvent.productId,
+      productName: activeEvent.productName || 'Selected Product',
+      priority: activeEvent.priority || 'CRITICAL',
+      priorityScore: activeEvent.priorityScore || 85,
       recommendedAction: evalAction,
-      status: evalStatus,
-      retryCount: latestEvent.retryCount || (isRecovered ? 1 : 0),
-      recoveryOutcome: isRecovered ? { recoveryStatus: 'RECOVERED', recoveredRevenue: recAmt } : null,
+      status: 'FAILED',
+      retryCount: activeEvent.retryCount || 0,
+      recoveryOutcome: null,
       isRuntime: true
     };
-
-    console.log('[MERCHANT DEBUG] Raw backend recovery events:', dbEvents);
-    console.log('[MERCHANT DEBUG] Canonical recovery lifecycles:', merchantRecoveryEvents);
-    console.log('[MERCHANT DEBUG] Selected active opportunity:', opp);
-    return opp;
-  }, [merchantRecoveryEvents, dbEvents]);
+  }, [merchantRecoveryEvents]);
 
   // Fallback opportunity ONLY for policy preview / webhook simulator when no active runtime opportunity exists
   const previewOpportunity = useMemo(() => {

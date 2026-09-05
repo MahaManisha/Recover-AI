@@ -1,5 +1,20 @@
-from typing import Optional
+from typing import Optional, Dict, Any
 from pydantic import BaseModel, ConfigDict
+
+class AuthorizeProposalRequest(BaseModel):
+    merchantId: str
+    caseId: str
+    activityId: str
+    proposalOptionId: str
+    actionType: str
+    requestedParams: Optional[Dict[str, Any]] = {}
+
+class AuthorizeProposalResponse(BaseModel):
+    serverAuthorizationId: str
+    authorizationProof: str
+    expiresAt: str
+    proposalFingerprint: str
+    status: str
 
 class RecoveryEventCreate(BaseModel):
     activityId: Optional[str] = None
@@ -20,6 +35,14 @@ class RecoveryEventCreate(BaseModel):
     retryCount: Optional[int] = 1
     paymentAttemptId: Optional[str] = None
     paymentResultId: Optional[str] = None
+    
+    # M10.15 Governed Execution Provenance Inputs
+    authorizationProof: Optional[str] = None
+    authorizationAuditId: Optional[str] = None
+    handoffAuditId: Optional[str] = None
+    proposalOptionId: Optional[str] = None
+    actionType: Optional[str] = None
+    requestedParams: Optional[Dict[str, Any]] = None
 
 class RecoveryEventUpdate(BaseModel):
     status: Optional[str] = None
@@ -47,6 +70,15 @@ class RecoveryEventResponse(BaseModel):
     retryCount: int
     paymentAttemptId: Optional[str] = None
     paymentResultId: Optional[str] = None
+    
+    # M10.15 Provenance Output Fields
+    serverAuthorizationId: Optional[str] = None
+    executionProvenanceId: Optional[str] = None
+    authorizationAuditId: Optional[str] = None
+    handoffAuditId: Optional[str] = None
+    operatorActorId: Optional[str] = None
+    idempotencyKey: Optional[str] = None
+    requiresReconciliation: Optional[bool] = False
     timestamp: str
 
     model_config = ConfigDict(from_attributes=True)

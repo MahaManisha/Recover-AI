@@ -61,6 +61,7 @@ export function getMerchantRecoveryMetrics(recoveryHistory = null) {
   };
 
   const actionBreakdown = {
+    RETRY_PAYMENT: 0,
     RECOVERY_OUTREACH: 0,
     MONITOR: 0,
     NO_ACTION: 0
@@ -72,7 +73,7 @@ export function getMerchantRecoveryMetrics(recoveryHistory = null) {
     const recovered = Number(item.recoveredRevenue || item.recoveredAmount || (isRec ? amount : 0)) || 0;
     
     totalRevenueAtRisk += amount;
-    totalRecoveredRevenue += recovered;
+    totalRecoveredRevenue += isRec ? recovered : 0;
     totalFailedAttempts += 1;
 
     const failureCode = item.failureCode || 'SERVER_ERROR';
@@ -89,8 +90,9 @@ export function getMerchantRecoveryMetrics(recoveryHistory = null) {
       priorityBreakdown[priority] = 1;
     }
 
-    const rawAction = item.recommendedAction || item.actionType || 'RECOVERY_OUTREACH';
-    const action = isRec ? 'RECOVERED' : rawAction;
+    const rawAction = item.recommendedAction || item.actionType || 'RETRY_PAYMENT';
+    const normAction = (rawAction === 'RECOVERY_OUTREACH' || rawAction === 'Retry Payment') ? 'RETRY_PAYMENT' : rawAction;
+    const action = isRec ? 'RECOVERED' : normAction;
     if (actionBreakdown[action] !== undefined) {
       actionBreakdown[action] += 1;
     } else {
@@ -101,7 +103,7 @@ export function getMerchantRecoveryMetrics(recoveryHistory = null) {
       totalRecoveredCount += 1;
     }
 
-    if (action === 'RECOVERY_OUTREACH') {
+    if (action === 'RETRY_PAYMENT') {
       totalOutreachCount += 1;
     }
 
@@ -118,21 +120,20 @@ export function getMerchantRecoveryMetrics(recoveryHistory = null) {
       failureReason: item.failureReason || 'Temporary processing error',
       priority: priority,
       priorityScore: Number(item.priorityScore) || 85,
-      recommendedAction: action,
+      recommendedAction: action === 'RETRY_PAYMENT' ? 'Retry Payment' : action,
       channel: item.channel || 'EMAIL',
       status: isRec ? 'RECOVERED' : (item.status || 'PENDING'),
       amount: amount,
-      recoveredAmount: recovered,
+      recoveredAmount: isRec ? recovered : 0,
       currency: item.currency || currency,
       retryCount: Number(item.retryCount) || 1,
       timestamp: item.timestamp || new Date().toISOString()
     };
   });
 
-  // Safe division: prevent NaN or Infinity if totalRevenueAtRisk === 0
-  const recoveryRatePercentage = totalRevenueAtRisk > 0
-    ? Number(((totalRecoveredRevenue / totalRevenueAtRisk) * 100).toFixed(1))
-    : 0.0;
+  const recoveryRatePercentage = totalFailedAttempts > 0
+    ? Math.round((totalRecoveredCount / totalFailedAttempts) * 100)
+    : 0;
 
   return {
     totalRevenueAtRisk,

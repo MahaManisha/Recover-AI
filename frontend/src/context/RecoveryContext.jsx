@@ -351,6 +351,7 @@ export function RecoveryProvider({ children }) {
         addMerchantProduct,
         setActiveRecoverySession,
         appendRecoveryEvent,
+        appendAuditLog,
         clearRecoverySession,
         resetRecoveryRuntime
       }}

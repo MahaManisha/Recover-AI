@@ -31,6 +31,12 @@ class RecoveryEvent(Base):
     retryCount = Column(Integer, default=1)
     paymentAttemptId = Column(String(255), nullable=True)
     paymentResultId = Column(String(255), nullable=True)
+    server_authorization_id = Column(String(255), nullable=True)
+    execution_provenance_id = Column(String(255), nullable=True)
+    authorization_audit_id = Column(String(255), nullable=True)
+    handoff_audit_id = Column(String(255), nullable=True)
+    operator_actor_id = Column(String(255), nullable=True)
+    idempotency_key = Column(String(255), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
@@ -57,5 +63,12 @@ class RecoveryEvent(Base):
             "retryCount": self.retryCount if self.retryCount is not None else 1,
             "paymentAttemptId": self.paymentAttemptId,
             "paymentResultId": self.paymentResultId,
+            "serverAuthorizationId": self.server_authorization_id,
+            "executionProvenanceId": self.execution_provenance_id,
+            "authorizationAuditId": self.authorization_audit_id,
+            "handoffAuditId": self.handoff_audit_id,
+            "operatorActorId": self.operator_actor_id,
+            "idempotencyKey": self.idempotency_key,
+            "requiresReconciliation": True if self.status in ("DISPATCHED", "EXECUTION_ACCEPTED") else False,
             "timestamp": self.created_at.isoformat() if self.created_at else utc_now().isoformat()
         }

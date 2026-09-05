@@ -15,10 +15,10 @@ export function Sidebar() {
   const navItems = [
     { name: 'Home', path: '/', icon: Home, show: true },
     { name: 'Customer', path: '/customer', icon: UserCheck, show: isAuthenticated && role === 'CUSTOMER' },
-    { name: 'Merchant', path: '/merchant', icon: Store, show: isAuthenticated && role === 'MERCHANT' },
-    { name: 'Agent Console', path: '/agent', icon: Bot, show: isAuthenticated && role === 'MERCHANT' },
-    { name: 'Audit Console', path: '/audit', icon: ShieldCheck, show: isAuthenticated && role === 'MERCHANT' },
-    { name: 'Benchmark Console', path: '/benchmark', icon: BarChart3, show: isAuthenticated && role === 'MERCHANT' },
+    { name: 'Merchant', path: '/merchant', icon: Store, show: isAuthenticated && (role === 'MERCHANT' || role === 'ADMIN') },
+    { name: 'Agent Console', path: '/agent', icon: Bot, show: isAuthenticated && (role === 'MERCHANT' || role === 'ADMIN') },
+    { name: 'Audit Console', path: '/audit', icon: ShieldCheck, show: isAuthenticated && (role === 'MERCHANT' || role === 'ADMIN') },
+    { name: 'Benchmark Console', path: '/benchmark', icon: BarChart3, show: isAuthenticated && (role === 'MERCHANT' || role === 'ADMIN') },
     { name: 'Login', path: '/login', icon: LogIn, show: !isAuthenticated },
   ];
 

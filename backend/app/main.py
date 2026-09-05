@@ -9,9 +9,13 @@ from app.core.database import engine, Base
 import app.models.user
 import app.models.product
 import app.models.recovery
+import app.models.merchant_autonomy
+import app.models.authorization
 
-# Create database tables automatically for development execution
-Base.metadata.create_all(bind=engine)
+from app.core.db_migration import run_migrations
+
+# Create database tables and perform dynamic migrations automatically
+run_migrations()
 
 app = FastAPI(
     title=settings.APP_NAME,
