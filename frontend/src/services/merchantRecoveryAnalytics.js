@@ -36,9 +36,8 @@ const DEFAULT_DEMO_ACTIVITY = [
  * @param {Array|null} recoveryHistory - Optional array of recovery event objects
  * @returns {Object} Calculated merchant recovery analytics schema with breakdowns
  */
-export function getMerchantRecoveryMetrics(recoveryHistory = null) {
-  const isDefaultDemo = recoveryHistory === null;
-  const historyToProcess = isDefaultDemo ? DEFAULT_DEMO_ACTIVITY : recoveryHistory;
+export function getMerchantRecoveryMetrics(recoveryHistory = []) {
+  const historyToProcess = Array.isArray(recoveryHistory) ? recoveryHistory : [];
 
   let totalRevenueAtRisk = 0;
   let totalRecoveredRevenue = 0;
@@ -157,12 +156,12 @@ export function getMerchantRecoveryMetrics(recoveryHistory = null) {
  * @returns {Object} Structured campaign performance summary
  */
 export function calculateCampaignPerformance(metrics) {
-  if (!metrics || typeof metrics !== 'object') {
+  if (!metrics || typeof metrics !== 'object' || metrics.totalFailedAttempts === 0) {
     return {
-      outreachSuccessRate: 100.0,
-      averageRecoveryTime: '< 5 minutes',
+      outreachSuccessRate: 0.0,
+      averageRecoveryTime: 'N/A',
       topPerformingChannel: 'EMAIL',
-      channelBreakdown: { EMAIL: { sent: 1, recovered: 1, successRate: 100.0 } }
+      channelBreakdown: { EMAIL: { sent: 0, recovered: 0, successRate: 0.0 } }
     };
   }
 
@@ -174,13 +173,13 @@ export function calculateCampaignPerformance(metrics) {
 
   return {
     outreachSuccessRate,
-    averageRecoveryTime: '< 5 minutes',
+    averageRecoveryTime: outreachCount > 0 ? '< 5 minutes' : 'N/A',
     topPerformingChannel: 'EMAIL',
     channelBreakdown: {
       EMAIL: {
-        sent: outreachCount || 1,
-        recovered: recoveredCount || 1,
-        successRate: outreachSuccessRate || 100.0
+        sent: outreachCount,
+        recovered: recoveredCount,
+        successRate: outreachSuccessRate
       }
     }
   };

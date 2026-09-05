@@ -32,7 +32,7 @@ class RecoveryEventCreate(BaseModel):
     channel: Optional[str] = "EMAIL"
     status: Optional[str] = "FAILED"
     recoveredAmount: Optional[float] = 0.0
-    retryCount: Optional[int] = 1
+    retryCount: Optional[int] = 0
     paymentAttemptId: Optional[str] = None
     paymentResultId: Optional[str] = None
     

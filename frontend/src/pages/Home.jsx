@@ -7,11 +7,11 @@ export function Home({ healthResult, loading, onRetry }) {
   const isConnected = Boolean(healthResult?.success && healthResult?.data?.status === 'ok');
 
   return (
-    <div className="relative min-h-[calc(100vh-140px)] flex flex-col justify-between overflow-hidden bg-grid-pattern rounded-2xl border border-slate-800/50 p-6 sm:p-10">
+    <div className="relative w-full flex-1 min-h-[calc(100vh-140px)] flex flex-col justify-between overflow-hidden bg-grid-pattern rounded-2xl border border-slate-800/50 p-6 sm:p-10">
       {/* Ambient Glow */}
-      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[400px] h-[400px] bg-cyan-500/10 blur-[100px] rounded-full pointer-events-none" />
+      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-cyan-500/10 blur-[120px] rounded-full pointer-events-none" />
 
-      <div className="relative max-w-4xl mx-auto flex-1 flex flex-col items-center justify-center text-center py-6">
+      <div className="relative w-full max-w-5xl mx-auto flex-1 flex flex-col items-center justify-center text-center py-6">
         
         {/* Status Pill */}
         <div className="mb-6">

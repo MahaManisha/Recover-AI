@@ -79,7 +79,7 @@ export function PaymentResult({
   const failureReason = FAILURE_LABELS[paymentResultEvent.failureCode] || 'Payment Failure';
 
   return (
-    <div className="w-full max-w-6xl mx-auto space-y-6 animate-fadeIn px-4 sm:px-6 lg:px-8">
+    <div className="w-full space-y-6 animate-fadeIn px-4 sm:px-6 lg:px-8">
       
       {/* Result Container Card */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 sm:p-8 lg:p-10 shadow-2xl backdrop-blur-xl text-center space-y-8 relative overflow-hidden">

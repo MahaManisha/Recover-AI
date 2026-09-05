@@ -49,13 +49,13 @@ def reconstruct_effective_lifecycle_state(db: Session, activity_id: str) -> Tupl
     # If ANY event is RECOVERED or BLOCKED, effective state is terminal
     for ev in events:
         if ev.status == "RECOVERED":
-            return ("RECOVERED", events[0], ev.retryCount or 1)
+            return ("RECOVERED", events[0], ev.retryCount if ev.retryCount is not None else 0)
         if ev.status == "BLOCKED":
-            return ("BLOCKED", events[0], ev.retryCount or 1)
+            return ("BLOCKED", events[0], ev.retryCount if ev.retryCount is not None else 0)
 
     latest = events[0]
     effective_state = latest.status or "FAILED"
-    max_retry_found = max([e.retryCount or 1 for e in events])
+    max_retry_found = max([e.retryCount if e.retryCount is not None else 0 for e in events])
 
     return (effective_state, latest, max_retry_found)
 

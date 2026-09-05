@@ -6,7 +6,7 @@ export function PaymentPlaceholder() {
   const navigate = useNavigate();
 
   return (
-    <div className="min-h-[calc(100vh-140px)] p-4 sm:p-6 md:p-8 max-w-4xl mx-auto space-y-6">
+    <div className="min-h-[calc(100vh-140px)] w-full space-y-6">
       
       {/* Top Navigation Back Action */}
       <div>

@@ -112,7 +112,7 @@ export function BenchmarkConsole() {
   };
 
   return (
-    <div className="w-full max-w-6xl mx-auto space-y-6 text-left">
+    <div className="w-full space-y-6 text-left">
       
       {/* Header Banner */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-2xl backdrop-blur-xl space-y-4 relative overflow-hidden">

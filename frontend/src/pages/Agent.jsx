@@ -52,6 +52,7 @@ import {
   fetchMerchantAutonomy, 
   updateMerchantAutonomy 
 } from '../services/api';
+import { DEFAULT_DEMO_MERCHANT_ID } from '../data/demoProduct';
 
 /**
  * RecoverAI Agent Console — Milestone 9.3
@@ -71,7 +72,7 @@ export function Agent() {
     appendAuditLog
   } = useRecovery();
 
-  const currentMerchantId = user?.merchantId || user?.id || activeMerchantId || '0a9a09a5-ef18-45da-a0ce-7c5f0f23a991';
+  const currentMerchantId = user?.merchantId || activeMerchantId || DEFAULT_DEMO_MERCHANT_ID;
 
   const [dbEvents, setDbEvents] = useState([]);
   const [executionState, setExecutionState] = useState('IDLE'); // 'IDLE' | 'EXECUTING' | 'SUCCEEDED' | 'FAILED' | 'BLOCKED'
@@ -192,13 +193,13 @@ export function Agent() {
   }, [dbEvents, recoveryEvents, currentMerchantId]);
 
   const decisionTrace = useMemo(() => {
-    const activeCase = baseConsoleState.activeCase || baseConsoleState.activeCases?.[0] || null;
-    if (!baseConsoleState.hasActiveCase || !activeCase) return null;
-
     const allCasesList = baseConsoleState.allCases || baseConsoleState.activeCases || [];
+    const activeCase = baseConsoleState.activeCase || baseConsoleState.activeCases?.[0] || allCasesList[0] || null;
     const targetCase = selectedCaseId
       ? (allCasesList.find(c => c.caseId === selectedCaseId) || activeCase)
       : activeCase;
+
+    if (!targetCase) return null;
 
     const baseStrat = evaluateRecoveryStrategy(targetCase);
     const adaptiveStrat = optimizeRecoveryStrategy(targetCase, baseStrat, strategyPerformance);
@@ -230,8 +231,7 @@ export function Agent() {
   }, [dbEvents, currentMerchantId, activeRecoverySession, autonomyEnabled]);
 
   const prioritizedQueue = useMemo(() => {
-    const allCasesList = baseConsoleState.allCases || baseConsoleState.activeCases || [];
-    const activeCases = allCasesList.filter(c => c.status !== 'RECOVERED' && c.status !== 'SUCCESS');
+    const activeCases = baseConsoleState.activeCases || [];
     return prioritizeRecoveryCases(
       activeCases,
       strategyPerformance,
@@ -239,7 +239,7 @@ export function Agent() {
       { status: baseConsoleState.agentDecision?.policyStatus || 'ALLOWED' },
       autonomyEnabled
     );
-  }, [baseConsoleState.allCases, baseConsoleState.activeCases, strategyPerformance, currentMerchantId, baseConsoleState.agentDecision, autonomyEnabled]);
+  }, [baseConsoleState.activeCases, strategyPerformance, currentMerchantId, baseConsoleState.agentDecision, autonomyEnabled]);
 
   const decisionSchedule = useMemo(() => {
     return scheduleRecoveryDecisions(
@@ -552,7 +552,7 @@ export function Agent() {
   }, [autonomyEnabled, baseConsoleState.activeCases, baseConsoleState.agentDecision, currentMerchantId, executedCandidates, handleExecuteAction]);
 
   return (
-    <div className="w-full max-w-6xl mx-auto space-y-6 text-left">
+    <div className="w-full space-y-6 text-left">
       
       {/* Header Banner */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-2xl backdrop-blur-xl space-y-4 relative overflow-hidden">

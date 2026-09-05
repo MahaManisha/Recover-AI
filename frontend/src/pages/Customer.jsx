@@ -59,7 +59,7 @@ export function Customer() {
   const customerName = user?.full_name ? user.full_name.split(' ')[0] : 'Customer';
 
   return (
-    <div className="min-h-[calc(100vh-140px)] p-4 sm:p-6 md:p-8 max-w-6xl mx-auto space-y-8">
+    <div className="min-h-[calc(100vh-140px)] w-full space-y-8">
       
       {/* 1. Customer Portal Top Header & Greeting */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800/80 pb-6">

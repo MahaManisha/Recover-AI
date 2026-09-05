@@ -28,7 +28,7 @@ class RecoveryEvent(Base):
     channel = Column(String(50), default="EMAIL")
     status = Column(String(50), default="FAILED", index=True)
     recoveredAmount = Column(Float, default=0.0)
-    retryCount = Column(Integer, default=1)
+    retryCount = Column(Integer, default=0)
     paymentAttemptId = Column(String(255), nullable=True)
     paymentResultId = Column(String(255), nullable=True)
     server_authorization_id = Column(String(255), nullable=True)
@@ -60,7 +60,7 @@ class RecoveryEvent(Base):
             "channel": self.channel or "EMAIL",
             "status": self.status or "FAILED",
             "recoveredAmount": self.recoveredAmount if self.recoveredAmount is not None else 0.0,
-            "retryCount": self.retryCount if self.retryCount is not None else 1,
+            "retryCount": self.retryCount if self.retryCount is not None else 0,
             "paymentAttemptId": self.paymentAttemptId,
             "paymentResultId": self.paymentResultId,
             "serverAuthorizationId": self.server_authorization_id,

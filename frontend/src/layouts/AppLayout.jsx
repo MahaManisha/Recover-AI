@@ -10,10 +10,10 @@ export function AppLayout({ healthResult, loading }) {
       <Header healthResult={healthResult} loading={loading} />
 
       {/* Main Container with Sidebar + Page Viewport */}
-      <div className="flex-1 flex flex-col md:flex-row max-w-7xl w-full mx-auto">
+      <div className="flex-1 flex flex-col md:flex-row w-full min-h-0">
         <Sidebar />
 
-        <main className="flex-1 p-4 sm:p-8 overflow-y-auto">
+        <main className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto w-full">
           <Outlet />
         </main>
       </div>

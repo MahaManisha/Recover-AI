@@ -56,7 +56,7 @@ export function getAgentConsoleState(activeRecoverySession = null, recoveryEvent
   const caseMap = new Map();
 
   rawItems.forEach(item => {
-    const key = item.paymentAttemptId || item.activityId || item.id || item.customerId || (item.amount ? `case_${item.amount}` : null);
+    const key = item.activityId || item.paymentAttemptId || item.id || (item.merchantId && item.customerId && item.productId ? `${item.merchantId}_${item.customerId}_${item.productId}` : null);
     if (!key) return;
 
     const existing = caseMap.get(key);
@@ -636,7 +636,7 @@ export function evaluateRecoveryLearning(strategyPerformance, adaptiveStrategy, 
 
   const baseRate = baseMetrics.caseRecoveryRate || 0;
   const optRate = optMetrics.caseRecoveryRate || 0;
-  const targetObservations = adaptiveStrategy?.historicalEvidence?.observations || sampleSize;
+  const targetObservations = (adaptiveStrategy?.historicalEvidence?.observations !== undefined && adaptiveStrategy?.historicalEvidence?.observations !== null) ? adaptiveStrategy.historicalEvidence.observations : sampleSize;
 
   // 1. Evidence Quality Classification
   let evidenceQuality = 'LIMITED';
@@ -900,7 +900,7 @@ export function buildRecoveryDecisionTrace(
     currency: recoveryCase.currency || 'INR',
     priority: recoveryCase.priority || 'CRITICAL',
     status: recoveryCase.status || 'FAILED',
-    reasoning: `Recovery case detected because payment attempt failed with ${recoveryCase.failureCode || 'SERVER_ERROR'} for ${caseIdentity.productName} (${caseIdentity.currency} ${Number(recoveryCase.amount).toLocaleString('en-IN')}).`
+    reasoning: `Recovery case detected because payment attempt failed with ${recoveryCase.failureCode || 'SERVER_ERROR'} for ${caseIdentity.productName} (${recoveryCase.currency || caseIdentity.currency || 'INR'} ${Number(recoveryCase.amount).toLocaleString('en-IN')}).`
   };
 
   // 3. Baseline Strategy Trace (M9.4)
@@ -4395,20 +4395,25 @@ export function buildRecoveryLifecycleExecutionAccountability(
     status: lastTransition?.status || lifecycleHistoryItem?.currentState || 'UNOBSERVED'
   };
 
+  const rawStatus = (recoveryEvent?.status || recoveryEvent?.currentStatus || lifecycleHistoryItem?.status || lifecycleHistoryItem?.currentStatus || lifecycleHistoryItem?.currentState || '').toUpperCase();
+  const inferredOutcome = rawStatus === 'RECOVERED' || rawStatus === 'SUCCESS'
+    ? 'RECOVERED'
+    : (rawStatus === 'FAILED' ? 'FAILED' : 'PENDING');
+
   // Stage 4: Reconciliation Identity (M10.6)
   const reconciliationIdentity = {
-    reconciliationStatus: lifecycleHistoryItem?.reconciliationStatus || (hasBackendEvent ? 'RECONCILED_SUCCESS' : 'RECONCILIATION_PENDING'),
-    reconciledOutcome: lifecycleHistoryItem?.recoveryOutcome || 'PENDING',
-    recoveryConfirmed: Boolean(lifecycleHistoryItem?.recoveryConfirmed),
-    recoveredAmount: Number(lifecycleHistoryItem?.recoveredAmount || 0)
+    reconciliationStatus: lifecycleHistoryItem?.reconciliationStatus || (hasBackendEvent ? (inferredOutcome === 'FAILED' ? 'RECONCILED_FAILED' : 'RECONCILED_SUCCESS') : 'RECONCILIATION_PENDING'),
+    reconciledOutcome: lifecycleHistoryItem?.recoveryOutcome || inferredOutcome,
+    recoveryConfirmed: Boolean(lifecycleHistoryItem?.recoveryConfirmed || inferredOutcome === 'RECOVERED'),
+    recoveredAmount: Number(lifecycleHistoryItem?.recoveredAmount || (inferredOutcome === 'RECOVERED' ? (recoveryEvent?.amount || lifecycleHistoryItem?.amount || 0) : 0))
   };
 
   // Stage 5: Finalization Identity (M10.7)
   const finalizationIdentity = {
-    lifecycleClassification: lifecycleHistoryItem?.lifecycleClassification || 'LIFECYCLE_UNRESOLVED',
+    lifecycleClassification: lifecycleHistoryItem?.lifecycleClassification || (inferredOutcome === 'FAILED' ? 'LIFECYCLE_NON_TERMINAL_ACTIVE' : 'LIFECYCLE_UNRESOLVED'),
     closureStatus: lifecycleHistoryItem?.closureStatus || 'OPEN',
     terminal: Boolean(lifecycleHistoryItem?.terminal),
-    recoveryOutcome: lifecycleHistoryItem?.recoveryOutcome || 'PENDING'
+    recoveryOutcome: lifecycleHistoryItem?.recoveryOutcome || inferredOutcome
   };
 
   // Check explicit proposal binding (to separate lifecycle correlation from proposal causality)
@@ -5729,11 +5734,10 @@ export function prioritizeRecoveryCases(
   }
 
   // 1. Merchant Filtering Safety & Terminal Case Exclusion (M10.7)
-  const merchantCases = activeCases.filter(c => 
-    (!currentMerchantId || c.merchantId === currentMerchantId) &&
-    c.status !== 'RECOVERED' && c.status !== 'SUCCESS' &&
-    !finalizeRecoveryLifecycle(null, c, currentMerchantId).terminal
-  );
+  const merchantCases = activeCases.filter(c => {
+    const fin = finalizeRecoveryLifecycle(null, c, currentMerchantId);
+    return (!currentMerchantId || c.merchantId === currentMerchantId) && fin.active === true && fin.terminal === false;
+  });
 
   if (merchantCases.length === 0) {
     return {

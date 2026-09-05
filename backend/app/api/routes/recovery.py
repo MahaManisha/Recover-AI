@@ -6,6 +6,8 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from fastapi import APIRouter, Depends, Query, Header, status, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models.recovery import RecoveryEvent
@@ -160,7 +162,7 @@ async def create_or_update_recovery_event(
     event_in: RecoveryEventCreate,
     x_idempotency_key: Optional[str] = Header(None, alias="X-Idempotency-Key"),
     db: Session = Depends(get_db),
-    auth_credentials = Depends(security_bearer)
+    auth_credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_bearer)
 ):
     """
     M10.15 Endpoint: Authenticates operator, validates single-use authorization nonces,
@@ -178,7 +180,7 @@ async def create_or_update_recovery_event(
                 raise e
             current_user = None
 
-    is_governed_execution = bool(event_in.authorizationProof or (current_user and current_user.role == "MERCHANT"))
+    is_governed_execution = bool(event_in.authorizationProof or (event_in.status in ("DISPATCHED", "EXECUTION_ACCEPTED") and current_user and current_user.role == "MERCHANT"))
 
     # Governed execution requires strict authentication & authorization proof
     if event_in.authorizationProof and not current_user:

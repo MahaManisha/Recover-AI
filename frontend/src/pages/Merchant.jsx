@@ -53,6 +53,8 @@ import {
   simulateWebhookDispatch, 
   formatCustomOutreachMessage 
 } from '../services/webhookDeliverySimulator';
+import { DEFAULT_DEMO_MERCHANT_ID } from '../data/demoProduct';
+import { finalizeRecoveryLifecycle, evaluateAgentDecision } from '../services/agentConsoleStream';
 
 import { useRecovery } from '../context/RecoveryContext';
 import { useAuth } from '../context/AuthContext';
@@ -80,7 +82,7 @@ export function Merchant() {
   const { user } = useAuth();
   const { activeRecoverySession, recoveryEvents, merchantProducts, addMerchantProduct, activeMerchantId, setActiveMerchantId } = useRecovery();
 
-  const currentMerchantId = user?.merchantId || user?.id || activeMerchantId || '0a9a09a5-ef18-45da-a0ce-7c5f0f23a991';
+  const currentMerchantId = user?.merchantId || activeMerchantId || DEFAULT_DEMO_MERCHANT_ID;
 
   React.useEffect(() => {
     if (currentMerchantId && setActiveMerchantId) {
@@ -154,34 +156,59 @@ export function Merchant() {
   }, [currentMerchantId, refreshMerchantRecoveryEvents]);
 
   const merchantRecoveryEvents = useMemo(() => {
-    if (!Array.isArray(dbEvents) || dbEvents.length === 0) {
+    const rawEvents = [];
+
+    const isMerchantMatch = (e) => {
+      if (!e) return false;
+      if (!e.merchantId) return true;
+      if (e.merchantId === currentMerchantId) return true;
+      if (e.merchantId === DEFAULT_DEMO_MERCHANT_ID) return true;
+      if (user?.id && e.merchantId === user.id) return true;
+      return false;
+    };
+
+    if (activeRecoverySession && isMerchantMatch(activeRecoverySession)) {
+      rawEvents.push(activeRecoverySession);
+    }
+
+    (recoveryEvents || []).forEach((e) => {
+      if (isMerchantMatch(e)) {
+        rawEvents.push(e);
+      }
+    });
+
+    (dbEvents || []).forEach((e) => {
+      if (isMerchantMatch(e)) {
+        rawEvents.push(e);
+      }
+    });
+
+    if (rawEvents.length === 0) {
       return [];
     }
 
     const eventMap = new Map();
 
-    (dbEvents || []).forEach((e) => {
-      if (!e.merchantId || e.merchantId === currentMerchantId) {
-        const key = e.activityId || e.id || e.paymentAttemptId;
-        if (key) {
-          const existing = eventMap.get(key);
-          if (!existing) {
-            eventMap.set(key, { ...e });
-          } else {
-            // Canonical lifecycle rule: RECOVERED status overrides FAILED
-            if (e.status === 'RECOVERED' || existing.status === 'RECOVERED') {
+    rawEvents.forEach((e) => {
+      const key = e.activityId || e.id || e.paymentAttemptId;
+      if (key) {
+        const existing = eventMap.get(key);
+        if (!existing) {
+          eventMap.set(key, { ...e });
+        } else {
+          // Canonical lifecycle rule: RECOVERED status overrides FAILED
+          if (e.status === 'RECOVERED' || existing.status === 'RECOVERED') {
+            existing.status = 'RECOVERED';
+            existing.recommendedAction = 'RECOVERED';
+            existing.recoveredAmount = Number(e.recoveredAmount || existing.recoveredAmount || e.amount || existing.amount) || 0;
+          }
+          if (getEventTimestamp(e) > getEventTimestamp(existing)) {
+            const wasRecovered = existing.status === 'RECOVERED' || e.status === 'RECOVERED';
+            Object.assign(existing, e);
+            if (wasRecovered) {
               existing.status = 'RECOVERED';
               existing.recommendedAction = 'RECOVERED';
               existing.recoveredAmount = Number(e.recoveredAmount || existing.recoveredAmount || e.amount || existing.amount) || 0;
-            }
-            if (getEventTimestamp(e) > getEventTimestamp(existing)) {
-              const wasRecovered = existing.status === 'RECOVERED' || e.status === 'RECOVERED';
-              Object.assign(existing, e);
-              if (wasRecovered) {
-                existing.status = 'RECOVERED';
-                existing.recommendedAction = 'RECOVERED';
-                existing.recoveredAmount = Number(e.recoveredAmount || existing.recoveredAmount || e.amount || existing.amount) || 0;
-              }
             }
           }
         }
@@ -192,41 +219,16 @@ export function Merchant() {
     canonicalEvents.sort((a, b) => getEventTimestamp(b) - getEventTimestamp(a));
 
     return canonicalEvents;
-  }, [dbEvents, currentMerchantId]);
+  }, [dbEvents, recoveryEvents, activeRecoverySession, currentMerchantId]);
 
   console.log('[Merchant] merchantRecoveryEvents', merchantRecoveryEvents);
 
   const metrics = useMemo(() => {
-    if (merchantRecoveryEvents.length > 0) {
+    if (Array.isArray(merchantRecoveryEvents) && merchantRecoveryEvents.length > 0) {
       return getMerchantRecoveryMetrics(merchantRecoveryEvents);
     }
-    if (hasValidActiveSession) {
-      const sess = activeRecoverySession;
-      const isRec = Boolean(sess.recoveryOutcome) || sess.currentStatus === 'RECOVERED';
-      const amt = typeof sess.amount === 'number' ? sess.amount : (Number(sess.amount || sess.revenueRiskContext?.revenueAtRisk) || 0);
-      const runtimeEvent = {
-        activityId: `act_${sess.resultEvent?.id || 'runtime'}`,
-        customerId: sess.customerId || sess.recoveryAssessment?.customerId || 'customer_demo',
-        merchantId: sess.merchantId || currentMerchantId,
-        productId: sess.productId || sess.recoveryAssessment?.productId,
-        productName: sess.productName || sess.recoveryAssessment?.productName || 'Selected Product',
-        failureCode: sess.failureCode || sess.resultEvent?.failureCode || 'SERVER_ERROR',
-        failureReason: sess.recoveryAssessment?.assessment?.failureSummary || 'Payment processing error',
-        priority: sess.recoveryPriority?.priority || 'CRITICAL',
-        priorityScore: sess.recoveryPriority?.score || 85,
-        recommendedAction: isRec ? 'RECOVERED' : (sess.recoveryDecision?.recommendedAction || sess.recommendedAction || 'RECOVERY_OUTREACH'),
-        channel: 'EMAIL',
-        status: isRec ? 'RECOVERED' : (sess.currentStatus || 'FAILED'),
-        amount: amt,
-        recoveredAmount: isRec ? (sess.recoveryOutcome?.recoveredRevenue || amt) : 0,
-        currency: sess.currency || 'INR',
-        retryCount: sess.retryAttempt?.retryCount || (isRec ? 1 : 0),
-        timestamp: sess.lastUpdated || new Date().toISOString()
-      };
-      return getMerchantRecoveryMetrics([runtimeEvent]);
-    }
     return getMerchantRecoveryMetrics([]);
-  }, [merchantRecoveryEvents, hasValidActiveSession, activeRecoverySession, currentMerchantId]);
+  }, [merchantRecoveryEvents]);
 
   const campaignPerf = useMemo(() => calculateCampaignPerformance(metrics), [metrics]);
 
@@ -300,29 +302,41 @@ export function Merchant() {
     productName: 'AI & Full-Stack Development Program'
   }), []);
 
-  // Dynamic active opportunity deriving authoritatively from latest active FAILED backend recovery event
+  // Dynamic active opportunity deriving authoritatively from latest active backend recovery event (M10.7 authority)
   const activeOpportunity = useMemo(() => {
     if (!Array.isArray(merchantRecoveryEvents) || merchantRecoveryEvents.length === 0) {
       return null;
     }
 
-    // Filter to find the latest active FAILED recovery event
-    const activeEvent = merchantRecoveryEvents.find(e => e.status === 'FAILED');
+    // merchantRecoveryEvents are sorted newest first.
+    // Find the newest event whose lifecycle is NON-TERMINAL ACTIVE according to M10.7 (finalizeRecoveryLifecycle)
+    const activeEvent = merchantRecoveryEvents.find(e => {
+      const targetMId = e.merchantId || currentMerchantId;
+      const finalization = finalizeRecoveryLifecycle(null, e, targetMId);
+      const rawSt = (e.status || e.currentStatus || '').toUpperCase();
+      return finalization.terminal === false && (finalization.active === true || rawSt === 'FAILED');
+    });
 
     if (!activeEvent) {
       return null;
     }
 
+    // Evaluate agent decision for recommendation (M9.4 strategy authority)
+    const decision = evaluateAgentDecision(activeEvent, null, dbEvents, merchantRecoveryEvents, currentMerchantId);
+
     const amt = Number(activeEvent.amount) || 0;
-    const rawAction = activeEvent.recommendedAction || 'RETRY_PAYMENT';
-    const evalAction = (rawAction === 'RECOVERY_OUTREACH' || rawAction === 'RETRY_PAYMENT') ? 'Retry Payment' : rawAction;
+    const recommendedActionLabel = decision?.actionLabel || (
+      activeEvent.recommendedAction === 'RECOVERY_OUTREACH' || activeEvent.recommendedAction === 'RETRY_PAYMENT'
+        ? 'Retry Payment'
+        : (activeEvent.recommendedAction || 'Retry Payment')
+    );
 
     return {
       ...activeEvent,
       activityId: activeEvent.activityId || activeEvent.id,
-      customerId: activeEvent.customerId || 'customer_demo',
-      paymentAttemptId: activeEvent.paymentAttemptId || activeEvent.activityId || 'att_demo',
-      paymentResultId: activeEvent.paymentResultId || 'result_demo',
+      customerId: activeEvent.customerId || 'Customer',
+      paymentAttemptId: activeEvent.paymentAttemptId || activeEvent.activityId,
+      paymentResultId: activeEvent.paymentResultId,
       amount: amt,
       recoveredAmount: 0,
       netRevenueSaved: 0,
@@ -334,13 +348,13 @@ export function Merchant() {
       productName: activeEvent.productName || 'Selected Product',
       priority: activeEvent.priority || 'CRITICAL',
       priorityScore: activeEvent.priorityScore || 85,
-      recommendedAction: evalAction,
-      status: 'FAILED',
-      retryCount: activeEvent.retryCount || 0,
+      recommendedAction: recommendedActionLabel,
+      status: activeEvent.status || 'FAILED',
+      retryCount: Number(activeEvent.retryCount) || 0,
       recoveryOutcome: null,
       isRuntime: true
     };
-  }, [merchantRecoveryEvents]);
+  }, [merchantRecoveryEvents, currentMerchantId, dbEvents]);
 
   // Fallback opportunity ONLY for policy preview / webhook simulator when no active runtime opportunity exists
   const previewOpportunity = useMemo(() => {
@@ -450,7 +464,7 @@ export function Merchant() {
   };
 
   return (
-    <div className="w-full max-w-6xl mx-auto space-y-6 text-left">
+    <div className="w-full space-y-6 text-left">
       
       {/* Header Banner & Export Action Bar */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-2xl backdrop-blur-xl space-y-4 relative overflow-hidden">
@@ -623,7 +637,7 @@ export function Merchant() {
           </div>
         ) : (
           <div className="py-6 text-center bg-slate-950/40 rounded-xl border border-slate-800/60 space-y-1">
-            <p className="text-slate-300 text-xs font-semibold">No active customer recovery session</p>
+            <p className="text-slate-300 text-xs font-semibold">No Active Recovery Session</p>
             <p className="text-slate-500 text-[11px]">No active payment failure or live recovery opportunity currently in progress.</p>
           </div>
         )}

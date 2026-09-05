@@ -97,7 +97,7 @@ export function PaymentAmountCard({ product: propProduct, onContinue, onBack }) 
 
   // Final retry attempt flag: Must be true if internally triggered via retry button or explicitly navigated as a retry
   const isRetryAttempt = Boolean(
-    isInternalRetryState || isExplicitNavRetry || (!isExplicitNavFresh && Boolean(navState.activityId))
+    isInternalRetryState || isExplicitNavRetry
   );
 
   const handleSimulateExecution = () => {
@@ -275,6 +275,9 @@ export function PaymentAmountCard({ product: propProduct, onContinue, onBack }) 
     if (!isRetry) {
       setFirstFailedAttempt(null);
       setFirstFailedResult(null);
+      setRetryCount(0);
+      setRetryOfAttemptId(null);
+      setIsInternalRetryState(false);
       console.log('[PaymentAmountCard] setActiveRecoverySession SOURCE: handlePayAttempt (new non-retry attempt reset -> NULL)');
       if (setActiveRecoverySession) {
         setActiveRecoverySession(null);
@@ -363,7 +366,7 @@ export function PaymentAmountCard({ product: propProduct, onContinue, onBack }) 
         setCustomerNotification(notif);
         setRecoveryOutcome(null);
 
-        const activityId = navState.activityId || activeRecoverySession?.activityId || (firstFailedAttempt ? `act_${firstFailedAttempt.id}` : `act_${attemptEvent.id}`);
+        const activityId = navState.activityId || (isRetryAttempt ? activeRecoverySession?.activityId : null) || (firstFailedAttempt ? `act_${firstFailedAttempt.id}` : `act_${attemptEvent.id}`);
 
         console.log('[PaymentAmountCard] FAILED Payment Attempt Event:', {
           activityId,
@@ -385,6 +388,7 @@ export function PaymentAmountCard({ product: propProduct, onContinue, onBack }) 
           currency: product.currency || 'INR',
           paymentMethod: selectedMethod,
           failureCode: resultEvent.failureCode || 'SERVER_ERROR',
+          status: 'FAILED',
           currentStatus: 'FAILED',
           isRetry: false,
           attemptEvent,
@@ -517,7 +521,7 @@ export function PaymentAmountCard({ product: propProduct, onContinue, onBack }) 
         setRecoveryExecution(null);
         setCustomerNotification(null);
 
-        const targetActivityId = navState.activityId || activeRecoverySession?.activityId || (firstFailedAttempt ? `act_${firstFailedAttempt.id}` : (lastAttemptEvent ? `act_${lastAttemptEvent.id}` : `act_${attemptEvent.id}`));
+        const targetActivityId = navState.activityId || (isRetryAttempt ? activeRecoverySession?.activityId : null) || (firstFailedAttempt ? `act_${firstFailedAttempt.id}` : (lastAttemptEvent ? `act_${lastAttemptEvent.id}` : `act_${attemptEvent.id}`));
         const preservedMerchantId = navState.merchantId || activeRecoverySession?.merchantId || targetMerchantId;
         const preservedProductId = navState.productId || activeRecoverySession?.productId || targetProductId;
         const preservedProductName = navState.productName || activeRecoverySession?.productName || targetProductName;
@@ -771,7 +775,7 @@ export function PaymentAmountCard({ product: propProduct, onContinue, onBack }) 
 
 
   return (
-    <div className="w-full max-w-6xl mx-auto space-y-6">
+    <div className="w-full space-y-6">
       
       {/* Navigation Header / Back Button */}
       <div className="flex items-center justify-between">
